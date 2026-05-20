@@ -32,6 +32,7 @@ typedef struct {
 static Display *dpy;
 static int      scr;
 static Window   root;
+static int      grid_cols;
 
 static Atom atom_client_list;
 static Atom atom_active_window;
@@ -223,6 +224,7 @@ compute_grid_layout(WinInfo *wins, int count, int scr_w, int scr_h)
 {
     int cols = (int)ceil(sqrt((double)count));
     int rows = (int)ceil((double)count / cols);
+    grid_cols = cols;
 
     int cell_w = (scr_w - PADDING * (cols + 1)) / cols;
     int cell_h = (scr_h - PADDING * (rows + 1)) / (rows) - TITLE_HEIGHT;
@@ -348,7 +350,7 @@ get_root_pixmap(void)
 
 static void
 render_thumbnails(Window overlay, WinInfo *wins, int count,
-                  int scr_w, int scr_h, XftFont *font)
+                  int scr_w, int scr_h, XftFont *font, int selected)
 {
     Visual *vis = DefaultVisual(dpy, scr);
     int depth = DefaultDepth(dpy, scr);
@@ -376,6 +378,7 @@ render_thumbnails(Window overlay, WinInfo *wins, int count,
     }
 
     XRenderColor border_color = { 0x4000, 0x4000, 0x5000, 0xFFFF };
+    XRenderColor highlight_color = { 0xCCCC, 0xCCCC, 0xFFFF, 0xFFFF };
 
     XErrorHandler old_handler = XSetErrorHandler(error_handler);
 
@@ -406,14 +409,25 @@ render_thumbnails(Window overlay, WinInfo *wins, int count,
         XRenderSetPictureTransform(dpy, src, &xform);
         XRenderSetPictureFilter(dpy, src, FilterBilinear, NULL, 0);
 
-        XRenderFillRectangle(dpy, PictOpOver, back_pic, &border_color,
-                             wins[i].cell_x - 2, wins[i].cell_y - 2,
-                             wins[i].thumb_w + 4, wins[i].thumb_h + 4);
+        int is_selected = (i == selected);
+        XRenderColor *bc = is_selected ? &highlight_color : &border_color;
+        int bw = is_selected ? 4 : 2;
+
+        XRenderFillRectangle(dpy, PictOpOver, back_pic, bc,
+                             wins[i].cell_x - bw, wins[i].cell_y - bw,
+                             wins[i].thumb_w + bw * 2, wins[i].thumb_h + bw * 2);
 
         XRenderComposite(dpy, PictOpOver, src, None, back_pic,
                          0, 0, 0, 0,
                          wins[i].cell_x, wins[i].cell_y,
                          wins[i].thumb_w, wins[i].thumb_h);
+
+        if (!is_selected) {
+            XRenderColor dim = { 0x0000, 0x0000, 0x0000, 0x3000 };
+            XRenderFillRectangle(dpy, PictOpOver, back_pic, &dim,
+                                 wins[i].cell_x, wins[i].cell_y,
+                                 wins[i].thumb_w, wins[i].thumb_h);
+        }
 
         XRenderFreePicture(dpy, src);
     }
@@ -544,6 +558,27 @@ main(int argc, char **argv)
     if (!font)
         font = XftFontOpenName(dpy, scr, "fixed");
 
+    int selected = 0;
+    {
+        Atom type;
+        int fmt;
+        unsigned long nitems, bytes;
+        unsigned char *data = NULL;
+        if (XGetWindowProperty(dpy, root, atom_active_window, 0, 1, False,
+                               XA_WINDOW, &type, &fmt, &nitems, &bytes,
+                               &data) == Success && data && nitems > 0) {
+            Window active = *(Window *)data;
+            XFree(data);
+            for (int i = 0; i < count; i++) {
+                if (wins[i].xwin == active) {
+                    selected = i;
+                    break;
+                }
+            }
+        } else if (data) {
+            XFree(data);
+        }
+    }
     int running = 1;
     while (running) {
         XEvent ev;
@@ -552,7 +587,7 @@ main(int argc, char **argv)
         switch (ev.type) {
         case Expose:
             if (ev.xexpose.count == 0)
-                render_thumbnails(overlay, wins, count, scr_w, scr_h, font);
+                render_thumbnails(overlay, wins, count, scr_w, scr_h, font, selected);
             break;
 
         case ButtonPress: {
@@ -565,8 +600,40 @@ main(int argc, char **argv)
 
         case KeyPress: {
             KeySym ks = XLookupKeysym(&ev.xkey, 0);
-            if (ks == XK_Escape)
+            int redraw = 0;
+
+            switch (ks) {
+            case XK_Escape:
                 running = 0;
+                break;
+            case XK_Return:
+            case XK_KP_Enter:
+                activate_window(wins[selected].xwin);
+                running = 0;
+                break;
+            case XK_Left:
+                if (selected > 0) { selected--; redraw = 1; }
+                break;
+            case XK_Right:
+                if (selected < count - 1) { selected++; redraw = 1; }
+                break;
+            case XK_Up:
+                if (selected - grid_cols >= 0) { selected -= grid_cols; redraw = 1; }
+                break;
+            case XK_Down:
+                if (selected + grid_cols < count) { selected += grid_cols; redraw = 1; }
+                break;
+            case XK_Tab:
+                if (ev.xkey.state & ShiftMask)
+                    selected = (selected - 1 + count) % count;
+                else
+                    selected = (selected + 1) % count;
+                redraw = 1;
+                break;
+            }
+
+            if (redraw)
+                render_thumbnails(overlay, wins, count, scr_w, scr_h, font, selected);
             break;
         }
         }
