@@ -963,11 +963,20 @@ main(int argc, char **argv)
                     mouse_active = 1;
             }
             if (mouse_active) {
-                int idx = find_window_at(wins, vis, vis_count, ev.xmotion.x, ev.xmotion.y);
-                if (idx >= 0 && (idx != selected || focus_mode != FOCUS_WINDOWS)) {
-                    selected = idx;
-                    focus_mode = FOCUS_WINDOWS;
-                    DO_RENDER();
+                int tab = find_tab_at(ev.xmotion.x, ev.xmotion.y, num_desktops, desk_layout, scr_w, scr_h);
+                if (tab >= 0) {
+                    if (focus_mode != FOCUS_TABS || tab_highlight != tab) {
+                        focus_mode = FOCUS_TABS;
+                        tab_highlight = tab;
+                        DO_RENDER();
+                    }
+                } else {
+                    int idx = find_window_at(wins, vis, vis_count, ev.xmotion.x, ev.xmotion.y);
+                    if (idx >= 0 && (idx != selected || focus_mode != FOCUS_WINDOWS)) {
+                        selected = idx;
+                        focus_mode = FOCUS_WINDOWS;
+                        DO_RENDER();
+                    }
                 }
             }
             break;
