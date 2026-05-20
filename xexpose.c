@@ -321,7 +321,7 @@ build_visible(WinInfo *wins, int total, unsigned long tab, int *vis, int max)
 {
     int n = 0;
     for (int i = 0; i < total && n < max; i++) {
-        if (wins[i].desktop == tab || wins[i].desktop == 0xFFFFFFFF)
+        if (wins[i].desktop == tab || wins[i].desktop == ~0UL)
             vis[n++] = i;
     }
     return n;
@@ -425,7 +425,7 @@ static void
 activate_window(Window win, unsigned long desktop)
 {
     unsigned long cur = get_cardinal(root, atom_cur_desktop);
-    if (desktop != cur && desktop != 0xFFFFFFFF) {
+    if (desktop != cur && desktop != ~0UL) {
         XEvent ev;
         memset(&ev, 0, sizeof(ev));
         ev.xclient.type         = ClientMessage;
@@ -609,8 +609,9 @@ render_thumbnails(Window overlay, WinInfo *wins, int *vis, int vis_count,
                              0, 0, scr_w, scr_h);
     }
 
-    XRenderColor border_color = { 0x4000, 0x4000, 0x5000, 0xFFFF };
+    XRenderColor border_color   = { 0x4000, 0x4000, 0x5000, 0xFFFF };
     XRenderColor highlight_color = { 0xCCCC, 0xCCCC, 0xFFFF, 0xFFFF };
+    XRenderColor sticky_color    = { 0xDDDD, 0xAAAA, 0x3333, 0xFFFF };
 
     XErrorHandler old_handler = XSetErrorHandler(error_handler);
 
@@ -643,8 +644,11 @@ render_thumbnails(Window overlay, WinInfo *wins, int *vis, int vis_count,
         XRenderSetPictureFilter(dpy, src, FilterBilinear, NULL, 0);
 
         int is_selected = (focus_mode == FOCUS_WINDOWS && vi == selected);
-        XRenderColor *bc = is_selected ? &highlight_color : &border_color;
-        int bw = is_selected ? 4 : 2;
+        int is_sticky = (wins[i].desktop == ~0UL);
+        XRenderColor *bc = is_selected ? &highlight_color
+                         : is_sticky   ? &sticky_color
+                         :               &border_color;
+        int bw = is_selected ? 4 : is_sticky ? 3 : 2;
 
         XRenderFillRectangle(dpy, PictOpOver, back_pic, bc,
                              wins[i].cell_x - bw, wins[i].cell_y - bw,
@@ -683,6 +687,7 @@ render_thumbnails(Window overlay, WinInfo *wins, int *vis, int vis_count,
             XRenderComposite(dpy, PictOpOver, wins[i].icon_pic, None, back_pic,
                              0, 0, 0, 0, ix, iy, iw, ih);
         }
+
 
         XRenderFreePicture(dpy, src);
     }
