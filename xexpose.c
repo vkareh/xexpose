@@ -694,26 +694,52 @@ render_thumbnails(Window overlay, WinInfo *wins, int *vis, int vis_count,
     XRenderColor rc = { 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF };
     XftColorAllocValue(dpy, dvis, cmap, &rc, &text_color);
 
+    XftColor shadow_color;
+    XRenderColor sc = { 0x0000, 0x0000, 0x0000, 0xCCCC };
+    XftColorAllocValue(dpy, dvis, cmap, &sc, &shadow_color);
+
     for (int vi = 0; vi < vis_count; vi++) {
         int i = vis[vi];
         int tx = wins[i].cell_x;
-        int ty = wins[i].cell_y + wins[i].thumb_h + TITLE_HEIGHT - 4;
+        int ty = wins[i].cell_y + wins[i].thumb_h + TITLE_HEIGHT;
         int max_w = wins[i].thumb_w;
 
         char *title = wins[i].title;
-        int len = strlen(title);
+        int full_len = strlen(title);
+        int len = full_len;
+        int truncated = 0;
 
         XGlyphInfo extents;
         XftTextExtentsUtf8(dpy, font, (FcChar8 *)title, len, &extents);
 
-        while (len > 1 && extents.xOff > max_w) {
-            len--;
-            XftTextExtentsUtf8(dpy, font, (FcChar8 *)title, len, &extents);
+        if (extents.xOff > max_w) {
+            XGlyphInfo ellipsis_ext;
+            XftTextExtentsUtf8(dpy, font, (FcChar8 *)"\xe2\x80\xa6", 3, &ellipsis_ext);
+            int avail = max_w - ellipsis_ext.xOff;
+
+            while (len > 1) {
+                len--;
+                XftTextExtentsUtf8(dpy, font, (FcChar8 *)title, len, &extents);
+                if (extents.xOff <= avail) break;
+            }
+            truncated = 1;
         }
 
+        XftDrawStringUtf8(xftdraw, &shadow_color, font,
+                          tx + 1, ty + 1, (FcChar8 *)title, len);
         XftDrawStringUtf8(xftdraw, &text_color, font,
                           tx, ty, (FcChar8 *)title, len);
+        if (truncated) {
+            XftDrawStringUtf8(xftdraw, &shadow_color, font,
+                              tx + extents.xOff + 1, ty + 1,
+                              (FcChar8 *)"\xe2\x80\xa6", 3);
+            XftDrawStringUtf8(xftdraw, &text_color, font,
+                              tx + extents.xOff, ty,
+                              (FcChar8 *)"\xe2\x80\xa6", 3);
+        }
     }
+
+    XftColorFree(dpy, dvis, cmap, &shadow_color);
 
     int tab_total_h = TAB_HEIGHT * layout.rows;
     int tab_w = scr_w / layout.cols;
