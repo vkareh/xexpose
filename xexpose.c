@@ -899,7 +899,7 @@ main(int argc, char **argv)
 
     XSetWindowAttributes swa;
     swa.override_redirect = True;
-    swa.event_mask = ExposureMask | ButtonPressMask | KeyPressMask | PointerMotionMask;
+    swa.event_mask = ExposureMask | ButtonPressMask | KeyPressMask | KeyReleaseMask | PointerMotionMask;
     swa.background_pixel = BlackPixel(dpy, scr);
 
     Window overlay = XCreateWindow(dpy, root,
@@ -944,6 +944,7 @@ main(int argc, char **argv)
 
     int focus_mode = FOCUS_WINDOWS;
     int tab_highlight = cur_tab;
+    int super_tab_count = 0;
 
     int mouse_start_x = -1, mouse_start_y = -1;
     int mouse_active = 0;
@@ -1123,6 +1124,8 @@ main(int argc, char **argv)
                         selected = (selected - 1 + vis_count) % vis_count;
                     else
                         selected = (selected + 1) % vis_count;
+                    if (ev.xkey.state & Mod4Mask)
+                        super_tab_count++;
                     redraw = 1;
                     break;
                 case XK_Page_Down:
@@ -1142,6 +1145,16 @@ main(int argc, char **argv)
 
             if (redraw)
                 DO_RENDER();
+            break;
+        }
+
+        case KeyRelease: {
+            KeySym ks = XLookupKeysym(&ev.xkey, 0);
+            if ((ks == XK_Super_L || ks == XK_Super_R) && super_tab_count > 0) {
+                if (vis_count > 0 && focus_mode == FOCUS_WINDOWS)
+                    activate_window(wins[vis[selected]].xwin, wins[vis[selected]].desktop);
+                running = 0;
+            }
             break;
         }
         }
