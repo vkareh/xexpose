@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <math.h>
 
@@ -16,10 +17,16 @@
 #define TITLE_HEIGHT 24
 #define BG_ALPHA   0x8000
 
+#define ICON_SIZE   96
+#define ICON_ALPHA  0xB333
+
 typedef struct {
     Window     xwin;
     Window     frame;
     Pixmap     pixmap;
+    Pixmap     icon_pm;
+    Picture    icon_pic;
+    int        icon_w, icon_h;
     Visual    *visual;
     int        depth;
     int        x, y;
@@ -44,6 +51,7 @@ static Atom atom_type_desktop;
 static Atom atom_wm_state;
 static Atom atom_state_hidden;
 static Atom atom_wm_name;
+static Atom atom_wm_icon;
 static Atom atom_utf8_string;
 
 static void
@@ -59,6 +67,7 @@ intern_atoms(void)
     atom_wm_state      = XInternAtom(dpy, "_NET_WM_STATE", False);
     atom_state_hidden  = XInternAtom(dpy, "_NET_WM_STATE_HIDDEN", False);
     atom_wm_name       = XInternAtom(dpy, "_NET_WM_NAME", False);
+    atom_wm_icon       = XInternAtom(dpy, "_NET_WM_ICON", False);
     atom_utf8_string   = XInternAtom(dpy, "UTF8_STRING", False);
 }
 
@@ -128,6 +137,85 @@ get_window_title(Window win)
         return title;
     }
     return strdup("(untitled)");
+}
+
+static void
+load_window_icon(WinInfo *wi)
+{
+    wi->icon_pm  = None;
+    wi->icon_pic = None;
+    wi->icon_w   = 0;
+    wi->icon_h   = 0;
+
+    Atom type;
+    int fmt;
+    unsigned long nitems, bytes;
+    unsigned char *data = NULL;
+
+    if (XGetWindowProperty(dpy, wi->xwin, atom_wm_icon, 0, 0x7FFFFFFF, False,
+                           XA_CARDINAL, &type, &fmt, &nitems, &bytes,
+                           &data) != Success || !data || nitems == 0) {
+        if (data) XFree(data);
+        return;
+    }
+
+    unsigned long *icon_data = (unsigned long *)data;
+    unsigned long *best = NULL;
+    int best_w = 0, best_h = 0;
+    int best_diff = 0x7FFFFFFF;
+
+    unsigned long *p = icon_data;
+    unsigned long *end = icon_data + nitems;
+    while (p + 2 <= end) {
+        int w = (int)p[0];
+        int h = (int)p[1];
+        if (w <= 0 || h <= 0 || p + 2 + (unsigned long)(w * h) > end)
+            break;
+        int diff = abs(w - ICON_SIZE) + abs(h - ICON_SIZE);
+        if (diff < best_diff) {
+            best_diff = diff;
+            best_w = w;
+            best_h = h;
+            best = p + 2;
+        }
+        p += 2 + w * h;
+    }
+
+    if (!best) {
+        XFree(data);
+        return;
+    }
+
+    XRenderPictFormat *argb_fmt = XRenderFindStandardFormat(dpy, PictStandardARGB32);
+    wi->icon_pm = XCreatePixmap(dpy, root, best_w, best_h, 32);
+    wi->icon_pic = XRenderCreatePicture(dpy, wi->icon_pm, argb_fmt, 0, NULL);
+
+    XRenderColor clear = { 0, 0, 0, 0 };
+    XRenderFillRectangle(dpy, PictOpSrc, wi->icon_pic, &clear,
+                         0, 0, best_w, best_h);
+
+    for (int y = 0; y < best_h; y++) {
+        for (int x = 0; x < best_w; x++) {
+            uint32_t pixel = (uint32_t)best[y * best_w + x];
+            uint8_t a = (pixel >> 24) & 0xFF;
+            if (a == 0) continue;
+            uint8_t r = (pixel >> 16) & 0xFF;
+            uint8_t g = (pixel >>  8) & 0xFF;
+            uint8_t b =  pixel        & 0xFF;
+            XRenderColor c = {
+                (unsigned short)((r << 8) | r),
+                (unsigned short)((g << 8) | g),
+                (unsigned short)((b << 8) | b),
+                (unsigned short)((a << 8) | a)
+            };
+            XRenderFillRectangle(dpy, PictOpSrc, wi->icon_pic, &c, x, y, 1, 1);
+        }
+    }
+
+    wi->icon_w = best_w;
+    wi->icon_h = best_h;
+
+    XFree(data);
 }
 
 static int
@@ -210,6 +298,7 @@ get_window_list(WinInfo **out, int *out_count, int use_frames)
             list[count].visual = wa.visual;
             list[count].depth  = wa.depth;
         }
+        load_window_icon(&list[count]);
         count++;
     }
     XFree(data);
@@ -429,6 +518,28 @@ render_thumbnails(Window overlay, WinInfo *wins, int count,
                                  wins[i].thumb_w, wins[i].thumb_h);
         }
 
+        if (wins[i].icon_pic != None) {
+            int iw = ICON_SIZE, ih = ICON_SIZE;
+            if (iw > wins[i].thumb_w / 2) iw = wins[i].thumb_w / 2;
+            if (ih > wins[i].thumb_h / 2) ih = wins[i].thumb_h / 2;
+
+            if (wins[i].icon_w != iw || wins[i].icon_h != ih) {
+                XTransform ixform = {{
+                    { XDoubleToFixed((double)wins[i].icon_w / iw), 0, 0 },
+                    { 0, XDoubleToFixed((double)wins[i].icon_h / ih), 0 },
+                    { 0, 0, XDoubleToFixed(1.0) }
+                }};
+                XRenderSetPictureTransform(dpy, wins[i].icon_pic, &ixform);
+                XRenderSetPictureFilter(dpy, wins[i].icon_pic, FilterBilinear, NULL, 0);
+            }
+
+            int ix = wins[i].cell_x + wins[i].thumb_w - iw - 4;
+            int iy = wins[i].cell_y + wins[i].thumb_h - ih - 4;
+
+            XRenderComposite(dpy, PictOpOver, wins[i].icon_pic, None, back_pic,
+                             0, 0, 0, 0, ix, iy, iw, ih);
+        }
+
         XRenderFreePicture(dpy, src);
     }
 
@@ -646,8 +757,13 @@ main(int argc, char **argv)
     XDestroyWindow(dpy, overlay);
 
     ungrab_pixmaps(wins, count);
-    for (int i = 0; i < count; i++)
+    for (int i = 0; i < count; i++) {
         free(wins[i].title);
+        if (wins[i].icon_pic != None)
+            XRenderFreePicture(dpy, wins[i].icon_pic);
+        if (wins[i].icon_pm != None)
+            XFreePixmap(dpy, wins[i].icon_pm);
+    }
     free(wins);
 
     XCloseDisplay(dpy);
