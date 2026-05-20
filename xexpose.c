@@ -649,7 +649,7 @@ main(int argc, char **argv)
 
     XSetWindowAttributes swa;
     swa.override_redirect = True;
-    swa.event_mask = ExposureMask | ButtonPressMask | KeyPressMask;
+    swa.event_mask = ExposureMask | ButtonPressMask | KeyPressMask | PointerMotionMask;
     swa.background_pixel = BlackPixel(dpy, scr);
 
     Window overlay = XCreateWindow(dpy, root,
@@ -662,7 +662,8 @@ main(int argc, char **argv)
 
     XGrabKeyboard(dpy, overlay, True, GrabModeAsync, GrabModeAsync, CurrentTime);
     XGrabPointer(dpy, overlay, True,
-                 ButtonPressMask, GrabModeAsync, GrabModeAsync,
+                 ButtonPressMask | PointerMotionMask,
+                 GrabModeAsync, GrabModeAsync,
                  overlay, None, CurrentTime);
 
     XftFont *font = XftFontOpenName(dpy, scr, "sans-10");
@@ -690,6 +691,18 @@ main(int argc, char **argv)
             XFree(data);
         }
     }
+    int mouse_start_x = -1, mouse_start_y = -1;
+    int mouse_active = 0;
+    {
+        Window qroot, qchild;
+        int rx, ry, wx, wy;
+        unsigned int mask;
+        if (XQueryPointer(dpy, overlay, &qroot, &qchild, &rx, &ry, &wx, &wy, &mask)) {
+            mouse_start_x = wx;
+            mouse_start_y = wy;
+        }
+    }
+
     int running = 1;
     while (running) {
         XEvent ev;
@@ -700,6 +713,23 @@ main(int argc, char **argv)
             if (ev.xexpose.count == 0)
                 render_thumbnails(overlay, wins, count, scr_w, scr_h, font, selected);
             break;
+
+        case MotionNotify: {
+            if (!mouse_active) {
+                int dx = ev.xmotion.x - mouse_start_x;
+                int dy = ev.xmotion.y - mouse_start_y;
+                if (dx * dx + dy * dy > 100)
+                    mouse_active = 1;
+            }
+            if (mouse_active) {
+                int idx = find_window_at(wins, count, ev.xmotion.x, ev.xmotion.y);
+                if (idx >= 0 && idx != selected) {
+                    selected = idx;
+                    render_thumbnails(overlay, wins, count, scr_w, scr_h, font, selected);
+                }
+            }
+            break;
+        }
 
         case ButtonPress: {
             int idx = find_window_at(wins, count, ev.xbutton.x, ev.xbutton.y);
