@@ -18,6 +18,7 @@
 
 typedef struct {
     Window     xwin;
+    Window     frame;
     Pixmap     pixmap;
     Visual    *visual;
     int        depth;
@@ -129,7 +130,7 @@ get_window_title(Window win)
 }
 
 static int
-get_window_list(WinInfo **out, int *out_count)
+get_window_list(WinInfo **out, int *out_count, int use_frames)
 {
     Atom            type;
     int             fmt;
@@ -168,15 +169,46 @@ get_window_list(WinInfo **out, int *out_count)
         if (wa.map_state != IsViewable)
             continue;
 
-        list[count].xwin   = w;
-        list[count].x      = wa.x;
-        list[count].y      = wa.y;
-        list[count].width  = wa.width;
-        list[count].height = wa.height;
-        list[count].visual = wa.visual;
-        list[count].depth  = wa.depth;
-        list[count].title  = get_window_title(w);
+        Window parent, qroot;
+        Window *children;
+        unsigned int nchildren;
+        Window frame = w;
+        if (XQueryTree(dpy, w, &qroot, &parent, &children, &nchildren)) {
+            if (children) XFree(children);
+            if (parent != root)
+                frame = parent;
+        }
+
+        list[count].xwin  = w;
+        list[count].frame = frame;
+        list[count].title = get_window_title(w);
         list[count].pixmap = None;
+
+        if (use_frames && frame != w) {
+            XWindowAttributes fwa;
+            if (XGetWindowAttributes(dpy, frame, &fwa)) {
+                list[count].x      = fwa.x;
+                list[count].y      = fwa.y;
+                list[count].width  = fwa.width;
+                list[count].height = fwa.height;
+                list[count].visual = fwa.visual;
+                list[count].depth  = fwa.depth;
+            } else {
+                list[count].x      = wa.x;
+                list[count].y      = wa.y;
+                list[count].width  = wa.width;
+                list[count].height = wa.height;
+                list[count].visual = wa.visual;
+                list[count].depth  = wa.depth;
+            }
+        } else {
+            list[count].x      = wa.x;
+            list[count].y      = wa.y;
+            list[count].width  = wa.width;
+            list[count].height = wa.height;
+            list[count].visual = wa.visual;
+            list[count].depth  = wa.depth;
+        }
         count++;
     }
     XFree(data);
@@ -234,14 +266,16 @@ grab_pixmaps(WinInfo *wins, int count)
     XErrorHandler old = XSetErrorHandler(error_handler);
 
     for (int i = 0; i < count; i++) {
+        Window target = wins[i].frame;
+
         x_error_occurred = 0;
-        XCompositeRedirectWindow(dpy, wins[i].xwin, CompositeRedirectAutomatic);
+        XCompositeRedirectWindow(dpy, target, CompositeRedirectAutomatic);
         XSync(dpy, False);
         if (x_error_occurred)
             continue;
 
         x_error_occurred = 0;
-        wins[i].pixmap = XCompositeNameWindowPixmap(dpy, wins[i].xwin);
+        wins[i].pixmap = XCompositeNameWindowPixmap(dpy, target);
         XSync(dpy, False);
         if (x_error_occurred)
             wins[i].pixmap = None;
@@ -261,7 +295,7 @@ ungrab_pixmaps(WinInfo *wins, int count)
             wins[i].pixmap = None;
         }
         x_error_occurred = 0;
-        XCompositeUnredirectWindow(dpy, wins[i].xwin, CompositeRedirectAutomatic);
+        XCompositeUnredirectWindow(dpy, wins[i].frame, CompositeRedirectAutomatic);
         XSync(dpy, False);
     }
 
@@ -468,7 +502,7 @@ main(int argc, char **argv)
 
     WinInfo *wins = NULL;
     int count = 0;
-    if (get_window_list(&wins, &count) < 0 || count == 0) {
+    if (get_window_list(&wins, &count, 1) < 0 || count == 0) {
         free(wins);
         XCloseDisplay(dpy);
         return 0;
