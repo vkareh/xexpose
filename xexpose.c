@@ -234,7 +234,7 @@ load_window_icon(WinInfo *wi)
 }
 
 static int
-get_window_list(WinInfo **out, int *out_count, int use_frames)
+get_window_list(WinInfo **out, int *out_count)
 {
     Atom            type;
     int             fmt;
@@ -286,7 +286,7 @@ get_window_list(WinInfo **out, int *out_count, int use_frames)
         list[count].title   = get_window_title(w);
         list[count].pixmap  = None;
 
-        if (use_frames && frame != w) {
+        if (frame != w) {
             XWindowAttributes fwa;
             if (XGetWindowAttributes(dpy, frame, &fwa)) {
                 list[count].x      = fwa.x;
@@ -869,7 +869,7 @@ main(int argc, char **argv)
 
     WinInfo *wins = NULL;
     int total = 0;
-    if (get_window_list(&wins, &total, 1) < 0 || total == 0) {
+    if (get_window_list(&wins, &total) < 0 || total == 0) {
         free(wins);
         for (int i = 0; i < num_desktops; i++) free(desk_names[i]);
         free(desk_names);
