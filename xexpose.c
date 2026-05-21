@@ -39,6 +39,7 @@ typedef struct {
     int           depth;
     int           x, y;
     unsigned      width, height;
+    unsigned      pw, ph;
     unsigned long desktop;
     char         *title;
     int           cell_x, cell_y;
@@ -63,6 +64,7 @@ static Atom atom_type_desktop;
 static Atom atom_wm_state;
 static Atom atom_state_hidden;
 static Atom atom_state_skip_pager;
+static Atom atom_frame_extents;
 static Atom atom_wm_name;
 static Atom atom_wm_icon;
 static Atom atom_utf8_string;
@@ -83,6 +85,7 @@ intern_atoms(void)
     atom_wm_state         = XInternAtom(dpy, "_NET_WM_STATE", False);
     atom_state_hidden     = XInternAtom(dpy, "_NET_WM_STATE_HIDDEN", False);
     atom_state_skip_pager = XInternAtom(dpy, "_NET_WM_STATE_SKIP_PAGER", False);
+    atom_frame_extents    = XInternAtom(dpy, "_NET_FRAME_EXTENTS", False);
     atom_wm_name          = XInternAtom(dpy, "_NET_WM_NAME", False);
     atom_wm_icon          = XInternAtom(dpy, "_NET_WM_ICON", False);
     atom_utf8_string      = XInternAtom(dpy, "UTF8_STRING", False);
@@ -302,32 +305,44 @@ get_window_list(WinInfo **out, int *out_count)
         list[count].desktop = desk;
         list[count].title   = get_window_title(w);
         list[count].pixmap  = None;
-
+        list[count].x       = wa.x;
+        list[count].y       = wa.y;
         if (frame != w) {
             XWindowAttributes fwa;
             if (XGetWindowAttributes(dpy, frame, &fwa)) {
-                list[count].x      = fwa.x;
-                list[count].y      = fwa.y;
-                list[count].width  = fwa.width;
-                list[count].height = fwa.height;
                 list[count].visual = fwa.visual;
                 list[count].depth  = fwa.depth;
             } else {
-                list[count].x      = wa.x;
-                list[count].y      = wa.y;
-                list[count].width  = wa.width;
-                list[count].height = wa.height;
                 list[count].visual = wa.visual;
                 list[count].depth  = wa.depth;
             }
         } else {
-            list[count].x      = wa.x;
-            list[count].y      = wa.y;
-            list[count].width  = wa.width;
-            list[count].height = wa.height;
             list[count].visual = wa.visual;
             list[count].depth  = wa.depth;
         }
+
+        Atom fe_type;
+        int fe_fmt;
+        unsigned long fe_nitems, fe_bytes;
+        unsigned char *fe_data = NULL;
+        if (frame != w
+            && XGetWindowProperty(dpy, w, atom_frame_extents, 0, 4, False,
+                                  XA_CARDINAL, &fe_type, &fe_fmt, &fe_nitems,
+                                  &fe_bytes, &fe_data) == Success
+            && fe_data && fe_nitems >= 4) {
+            unsigned long *ext = (unsigned long *)fe_data;
+            list[count].width  = wa.width  + ext[0] + ext[1];
+            list[count].height = wa.height + ext[2] + ext[3];
+            list[count].pw     = wa.x - (int)ext[0];
+            list[count].ph     = wa.y - (int)ext[2];
+        } else {
+            list[count].width  = wa.width;
+            list[count].height = wa.height;
+            list[count].pw     = 0;
+            list[count].ph     = 0;
+        }
+        if (fe_data) XFree(fe_data);
+
         load_window_icon(&list[count]);
         count++;
     }
@@ -656,9 +671,11 @@ render_thumbnails(Window overlay, WinInfo *wins, int *vis, int vis_count,
         if (x_error_occurred)
             continue;
 
+        double sx = (double)wins[i].width  / wins[i].thumb_w;
+        double sy = (double)wins[i].height / wins[i].thumb_h;
         XTransform xform = {{
-            { XDoubleToFixed((double)wins[i].width  / wins[i].thumb_w), 0, 0 },
-            { 0, XDoubleToFixed((double)wins[i].height / wins[i].thumb_h), 0 },
+            { XDoubleToFixed(sx), 0, XDoubleToFixed(wins[i].pw) },
+            { 0, XDoubleToFixed(sy), XDoubleToFixed(wins[i].ph) },
             { 0, 0, XDoubleToFixed(1.0) }
         }};
         XRenderSetPictureTransform(dpy, src, &xform);
