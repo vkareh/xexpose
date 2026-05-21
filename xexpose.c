@@ -14,10 +14,10 @@
 #include <X11/extensions/Xfixes.h>
 #include <X11/Xft/Xft.h>
 
-#define PADDING     20
+#define PADDING      20
 #define TITLE_HEIGHT 24
-#define TAB_HEIGHT  36
-#define BG_ALPHA   0x8000
+#define TAB_HEIGHT   36
+#define BG_ALPHA     0x8000
 
 #define ICON_SIZE   96
 #define ICON_ALPHA  0xB333
@@ -59,6 +59,7 @@ static Atom atom_type_dock;
 static Atom atom_type_desktop;
 static Atom atom_wm_state;
 static Atom atom_state_hidden;
+static Atom atom_state_skip_pager;
 static Atom atom_wm_name;
 static Atom atom_wm_icon;
 static Atom atom_utf8_string;
@@ -66,21 +67,22 @@ static Atom atom_utf8_string;
 static void
 intern_atoms(void)
 {
-    atom_client_list   = XInternAtom(dpy, "_NET_CLIENT_LIST", False);
-    atom_active_window = XInternAtom(dpy, "_NET_ACTIVE_WINDOW", False);
-    atom_wm_desktop    = XInternAtom(dpy, "_NET_WM_DESKTOP", False);
-    atom_cur_desktop   = XInternAtom(dpy, "_NET_CURRENT_DESKTOP", False);
-    atom_num_desktops  = XInternAtom(dpy, "_NET_NUMBER_OF_DESKTOPS", False);
-    atom_desktop_names = XInternAtom(dpy, "_NET_DESKTOP_NAMES", False);
-    atom_desktop_layout = XInternAtom(dpy, "_NET_DESKTOP_LAYOUT", False);
-    atom_wm_type       = XInternAtom(dpy, "_NET_WM_WINDOW_TYPE", False);
-    atom_type_dock     = XInternAtom(dpy, "_NET_WM_WINDOW_TYPE_DOCK", False);
-    atom_type_desktop  = XInternAtom(dpy, "_NET_WM_WINDOW_TYPE_DESKTOP", False);
-    atom_wm_state      = XInternAtom(dpy, "_NET_WM_STATE", False);
-    atom_state_hidden  = XInternAtom(dpy, "_NET_WM_STATE_HIDDEN", False);
-    atom_wm_name       = XInternAtom(dpy, "_NET_WM_NAME", False);
-    atom_wm_icon       = XInternAtom(dpy, "_NET_WM_ICON", False);
-    atom_utf8_string   = XInternAtom(dpy, "UTF8_STRING", False);
+    atom_client_list      = XInternAtom(dpy, "_NET_CLIENT_LIST", False);
+    atom_active_window    = XInternAtom(dpy, "_NET_ACTIVE_WINDOW", False);
+    atom_wm_desktop       = XInternAtom(dpy, "_NET_WM_DESKTOP", False);
+    atom_cur_desktop      = XInternAtom(dpy, "_NET_CURRENT_DESKTOP", False);
+    atom_num_desktops     = XInternAtom(dpy, "_NET_NUMBER_OF_DESKTOPS", False);
+    atom_desktop_names    = XInternAtom(dpy, "_NET_DESKTOP_NAMES", False);
+    atom_desktop_layout   = XInternAtom(dpy, "_NET_DESKTOP_LAYOUT", False);
+    atom_wm_type          = XInternAtom(dpy, "_NET_WM_WINDOW_TYPE", False);
+    atom_type_dock        = XInternAtom(dpy, "_NET_WM_WINDOW_TYPE_DOCK", False);
+    atom_type_desktop     = XInternAtom(dpy, "_NET_WM_WINDOW_TYPE_DESKTOP", False);
+    atom_wm_state         = XInternAtom(dpy, "_NET_WM_STATE", False);
+    atom_state_hidden     = XInternAtom(dpy, "_NET_WM_STATE_HIDDEN", False);
+    atom_state_skip_pager = XInternAtom(dpy, "_NET_WM_STATE_SKIP_PAGER", False);
+    atom_wm_name          = XInternAtom(dpy, "_NET_WM_NAME", False);
+    atom_wm_icon          = XInternAtom(dpy, "_NET_WM_ICON", False);
+    atom_utf8_string      = XInternAtom(dpy, "UTF8_STRING", False);
 }
 
 static unsigned long
@@ -173,17 +175,18 @@ load_window_icon(WinInfo *wi)
 
     unsigned long *icon_data = (unsigned long *)data;
     unsigned long *best = NULL;
-    int best_w = 0, best_h = 0;
-    int best_diff = 0x7FFFFFFF;
+    unsigned long best_w = 0, best_h = 0;
+    unsigned long best_diff = ~0UL;
 
     unsigned long *p = icon_data;
     unsigned long *end = icon_data + nitems;
     while (p + 2 <= end) {
-        int w = (int)p[0];
-        int h = (int)p[1];
-        if (w <= 0 || h <= 0 || p + 2 + (unsigned long)(w * h) > end)
+        unsigned long w = p[0];
+        unsigned long h = p[1];
+        if (w == 0 || h == 0 || w > 1024 || h > 1024 || p + 2 + w * h > end)
             break;
-        int diff = abs(w - ICON_SIZE) + abs(h - ICON_SIZE);
+        unsigned long diff = (w > ICON_SIZE ? w - ICON_SIZE : ICON_SIZE - w)
+                           + (h > ICON_SIZE ? h - ICON_SIZE : ICON_SIZE - h);
         if (diff < best_diff) {
             best_diff = diff;
             best_w = w;
@@ -206,8 +209,8 @@ load_window_icon(WinInfo *wi)
     XRenderFillRectangle(dpy, PictOpSrc, wi->icon_pic, &clear,
                          0, 0, best_w, best_h);
 
-    for (int y = 0; y < best_h; y++) {
-        for (int x = 0; x < best_w; x++) {
+    for (unsigned long y = 0; y < best_h; y++) {
+        for (unsigned long x = 0; x < best_w; x++) {
             uint32_t pixel = (uint32_t)best[y * best_w + x];
             uint8_t a = (pixel >> 24) & 0xFF;
             if (a == 0) continue;
@@ -257,6 +260,8 @@ get_window_list(WinInfo **out, int *out_count, int use_frames)
         if (has_atom_in_list(w, atom_wm_type, atom_type_desktop))
             continue;
         if (has_atom_in_list(w, atom_wm_state, atom_state_hidden))
+            continue;
+        if (has_atom_in_list(w, atom_wm_state, atom_state_skip_pager))
             continue;
 
         XWindowAttributes wa;
@@ -422,7 +427,7 @@ ungrab_visible_pixmaps(WinInfo *wins, int *vis, int vis_count)
 }
 
 static void
-activate_window(Window win, unsigned long desktop)
+activate_window(Window win, unsigned long desktop, Time timestamp)
 {
     unsigned long cur = get_cardinal(root, atom_cur_desktop);
     if (desktop != cur && desktop != ~0UL) {
@@ -433,7 +438,7 @@ activate_window(Window win, unsigned long desktop)
         ev.xclient.message_type = atom_cur_desktop;
         ev.xclient.format       = 32;
         ev.xclient.data.l[0]    = (long)desktop;
-        ev.xclient.data.l[1]    = CurrentTime;
+        ev.xclient.data.l[1]    = (long)timestamp;
         XSendEvent(dpy, root, False,
                    SubstructureNotifyMask | SubstructureRedirectMask, &ev);
     }
@@ -445,7 +450,7 @@ activate_window(Window win, unsigned long desktop)
     ev.xclient.message_type = atom_active_window;
     ev.xclient.format       = 32;
     ev.xclient.data.l[0]    = 2;
-    ev.xclient.data.l[1]    = CurrentTime;
+    ev.xclient.data.l[1]    = (long)timestamp;
     ev.xclient.data.l[2]    = 0;
 
     XSendEvent(dpy, root, False,
@@ -471,9 +476,8 @@ switch_desktop(int desktop)
 }
 
 static void
-wait_for_map(Window win)
+wait_for_map(void)
 {
-    (void)win;
     usleep(50000);
     XSync(dpy, False);
 }
@@ -609,7 +613,7 @@ render_thumbnails(Window overlay, WinInfo *wins, int *vis, int vis_count,
                              0, 0, scr_w, scr_h);
     }
 
-    XRenderColor border_color   = { 0x4000, 0x4000, 0x5000, 0xFFFF };
+    XRenderColor border_color    = { 0x4000, 0x4000, 0x5000, 0xFFFF };
     XRenderColor highlight_color = { 0xCCCC, 0xCCCC, 0xFFFF, 0xFFFF };
     XRenderColor sticky_color    = { 0xDDDD, 0xAAAA, 0x3333, 0xFFFF };
 
@@ -880,7 +884,7 @@ main(int argc, char **argv)
     int vis_count = build_visible(wins, total, cur_tab, vis, total);
 
     if (vis_count == 1 && num_desktops == 1) {
-        activate_window(wins[vis[0]].xwin, wins[vis[0]].desktop);
+        activate_window(wins[vis[0]].xwin, wins[vis[0]].desktop, CurrentTime);
         for (int i = 0; i < total; i++) {
             free(wins[i].title);
             if (wins[i].icon_pic != None) XRenderFreePicture(dpy, wins[i].icon_pic);
@@ -919,6 +923,12 @@ main(int argc, char **argv)
     XftFont *font = XftFontOpenName(dpy, scr, "sans-10");
     if (!font)
         font = XftFontOpenName(dpy, scr, "fixed");
+    if (!font) {
+        fprintf(stderr, "xexpose: cannot open any font\n");
+        ungrab_visible_pixmaps(wins, vis, vis_count);
+        XDestroyWindow(dpy, overlay);
+        goto cleanup;
+    }
 
     int selected = 0;
     {
@@ -969,7 +979,7 @@ main(int argc, char **argv)
     switch_desktop(cur_tab); \
     vis_count = build_visible(wins, total, cur_tab, vis, total); \
     if (vis_count > 0) \
-        wait_for_map(wins[vis[0]].xwin); \
+        wait_for_map(); \
     compute_grid_layout(wins, vis, vis_count, scr_w, scr_h, tab_total_h); \
     grab_visible_pixmaps(wins, vis, vis_count); \
     selected = 0; \
@@ -1024,7 +1034,7 @@ main(int argc, char **argv)
 
             int idx = find_window_at(wins, vis, vis_count, ev.xbutton.x, ev.xbutton.y);
             if (idx >= 0)
-                activate_window(wins[vis[idx]].xwin, wins[vis[idx]].desktop);
+                activate_window(wins[vis[idx]].xwin, wins[vis[idx]].desktop, ev.xbutton.time);
             running = 0;
             break;
         }
@@ -1096,7 +1106,7 @@ main(int argc, char **argv)
                 case XK_Return:
                 case XK_KP_Enter:
                     if (vis_count > 0) {
-                        activate_window(wins[vis[selected]].xwin, wins[vis[selected]].desktop);
+                        activate_window(wins[vis[selected]].xwin, wins[vis[selected]].desktop, ev.xkey.time);
                         running = 0;
                     }
                     break;
@@ -1120,6 +1130,7 @@ main(int argc, char **argv)
                     }
                     break;
                 case XK_Tab:
+                    if (vis_count == 0) break;
                     if (ev.xkey.state & ShiftMask)
                         selected = (selected - 1 + vis_count) % vis_count;
                     else
@@ -1152,7 +1163,7 @@ main(int argc, char **argv)
             KeySym ks = XLookupKeysym(&ev.xkey, 0);
             if ((ks == XK_Super_L || ks == XK_Super_R) && super_tab_count > 0) {
                 if (vis_count > 0 && focus_mode == FOCUS_WINDOWS)
-                    activate_window(wins[vis[selected]].xwin, wins[vis[selected]].desktop);
+                    activate_window(wins[vis[selected]].xwin, wins[vis[selected]].desktop, ev.xkey.time);
                 running = 0;
             }
             break;
@@ -1166,6 +1177,7 @@ main(int argc, char **argv)
     XUngrabKeyboard(dpy, CurrentTime);
     XDestroyWindow(dpy, overlay);
 
+cleanup:
     ungrab_visible_pixmaps(wins, vis, vis_count);
     for (int i = 0; i < total; i++) {
         free(wins[i].title);
