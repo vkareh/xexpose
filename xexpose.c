@@ -13,6 +13,9 @@
 #include <X11/extensions/Xrender.h>
 #include <X11/extensions/Xfixes.h>
 #include <X11/Xft/Xft.h>
+#include <cairo/cairo.h>
+#include <cairo/cairo-xlib.h>
+#include <cairo/cairo-xlib-xrender.h>
 
 #define PADDING      20
 #define TITLE_HEIGHT 24
@@ -176,7 +179,6 @@ load_window_icon(WinInfo *wi)
     unsigned long *icon_data = (unsigned long *)data;
     unsigned long *best = NULL;
     unsigned long best_w = 0, best_h = 0;
-    unsigned long best_diff = ~0UL;
 
     unsigned long *p = icon_data;
     unsigned long *end = icon_data + nitems;
@@ -185,10 +187,7 @@ load_window_icon(WinInfo *wi)
         unsigned long h = p[1];
         if (w == 0 || h == 0 || w > 1024 || h > 1024 || p + 2 + w * h > end)
             break;
-        unsigned long diff = (w > ICON_SIZE ? w - ICON_SIZE : ICON_SIZE - w)
-                           + (h > ICON_SIZE ? h - ICON_SIZE : ICON_SIZE - h);
-        if (diff < best_diff) {
-            best_diff = diff;
+        if (w * h > best_w * best_h) {
             best_w = w;
             best_h = h;
             best = p + 2;
@@ -201,34 +200,52 @@ load_window_icon(WinInfo *wi)
         return;
     }
 
-    XRenderPictFormat *argb_fmt = XRenderFindStandardFormat(dpy, PictStandardARGB32);
-    wi->icon_pm = XCreatePixmap(dpy, root, best_w, best_h, 32);
-    wi->icon_pic = XRenderCreatePicture(dpy, wi->icon_pm, argb_fmt, 0, NULL);
-
-    XRenderColor clear = { 0, 0, 0, 0 };
-    XRenderFillRectangle(dpy, PictOpSrc, wi->icon_pic, &clear,
-                         0, 0, best_w, best_h);
+    cairo_surface_t *img = cairo_image_surface_create(CAIRO_FORMAT_ARGB32,
+                                                      best_w, best_h);
+    cairo_surface_flush(img);
+    uint32_t *pixels = (uint32_t *)cairo_image_surface_get_data(img);
+    int stride = cairo_image_surface_get_stride(img) / 4;
 
     for (unsigned long y = 0; y < best_h; y++) {
         for (unsigned long x = 0; x < best_w; x++) {
-            uint32_t pixel = (uint32_t)best[y * best_w + x];
-            uint8_t a = (pixel >> 24) & 0xFF;
-            if (a == 0) continue;
-            uint8_t r = (pixel >> 16) & 0xFF;
-            uint8_t g = (pixel >>  8) & 0xFF;
-            uint8_t b =  pixel        & 0xFF;
-            XRenderColor c = {
-                (unsigned short)((r << 8) | r),
-                (unsigned short)((g << 8) | g),
-                (unsigned short)((b << 8) | b),
-                (unsigned short)((a << 8) | a)
-            };
-            XRenderFillRectangle(dpy, PictOpSrc, wi->icon_pic, &c, x, y, 1, 1);
+            uint32_t argb = (uint32_t)best[y * best_w + x];
+            uint8_t a = (argb >> 24) & 0xFF;
+            uint8_t r = ((argb >> 16) & 0xFF) * a / 255;
+            uint8_t g = ((argb >>  8) & 0xFF) * a / 255;
+            uint8_t b = ( argb        & 0xFF) * a / 255;
+            pixels[y * stride + x] = ((uint32_t)a << 24) | ((uint32_t)r << 16)
+                                   | ((uint32_t)g << 8) | b;
         }
     }
 
-    wi->icon_w = best_w;
-    wi->icon_h = best_h;
+    cairo_surface_mark_dirty(img);
+
+    int out_w = ICON_SIZE, out_h = ICON_SIZE;
+    if ((int)best_w < out_w) out_w = (int)best_w;
+    if ((int)best_h < out_h) out_h = (int)best_h;
+
+    XRenderPictFormat *argb_fmt = XRenderFindStandardFormat(dpy, PictStandardARGB32);
+    wi->icon_pm = XCreatePixmap(dpy, root, out_w, out_h, 32);
+    wi->icon_pic = XRenderCreatePicture(dpy, wi->icon_pm, argb_fmt, 0, NULL);
+
+    cairo_surface_t *xsurf = cairo_xlib_surface_create_with_xrender_format(
+        dpy, wi->icon_pm, DefaultScreenOfDisplay(dpy), argb_fmt, out_w, out_h);
+    cairo_t *cr = cairo_create(xsurf);
+
+    double sx = (double)out_w / best_w;
+    double sy = (double)out_h / best_h;
+    cairo_scale(cr, sx, sy);
+    cairo_set_source_surface(cr, img, 0, 0);
+    cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_BILINEAR);
+    cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
+    cairo_paint(cr);
+
+    cairo_destroy(cr);
+    cairo_surface_destroy(xsurf);
+    cairo_surface_destroy(img);
+
+    wi->icon_w = out_w;
+    wi->icon_h = out_h;
 
     XFree(data);
 }
