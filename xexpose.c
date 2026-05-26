@@ -569,12 +569,14 @@ get_focused_monitor(void)
                            &data) == Success && data && nitems > 0) {
         Window active = *(Window *)data;
         XFree(data);
-        XWindowAttributes wa;
-        if (XGetWindowAttributes(dpy, active, &wa)) {
-            Window child;
-            XTranslateCoordinates(dpy, active, root, 0, 0,
-                                  &focus_x, &focus_y, &child);
-            found = 1;
+        if (!has_atom_in_list(active, atom_wm_type, atom_type_desktop)) {
+            XWindowAttributes wa;
+            if (XGetWindowAttributes(dpy, active, &wa)) {
+                Window child;
+                XTranslateCoordinates(dpy, active, root, 0, 0,
+                                      &focus_x, &focus_y, &child);
+                found = 1;
+            }
         }
     } else {
         if (data) XFree(data);
