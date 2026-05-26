@@ -631,7 +631,24 @@ render_thumbnails(Window overlay, WinInfo *wins, int *vis, int vis_count,
 
     Pixmap root_pm = get_root_pixmap();
     if (root_pm != None) {
+        Window pm_root;
+        int pm_x, pm_y;
+        unsigned pm_w, pm_h, pm_bw, pm_depth;
+        XGetGeometry(dpy, root_pm, &pm_root, &pm_x, &pm_y,
+                     &pm_w, &pm_h, &pm_bw, &pm_depth);
+
         Picture root_pic = XRenderCreatePicture(dpy, root_pm, fmt_overlay, 0, NULL);
+
+        if (pm_w != (unsigned)scr_w || pm_h != (unsigned)scr_h) {
+            XTransform xform = {{
+                { XDoubleToFixed((double)pm_w / scr_w), 0, 0 },
+                { 0, XDoubleToFixed((double)pm_h / scr_h), 0 },
+                { 0, 0, XDoubleToFixed(1.0) }
+            }};
+            XRenderSetPictureTransform(dpy, root_pic, &xform);
+            XRenderSetPictureFilter(dpy, root_pic, FilterBilinear, NULL, 0);
+        }
+
         XRenderComposite(dpy, PictOpSrc, root_pic, None, back_pic,
                          0, 0, 0, 0, 0, 0, scr_w, scr_h);
         XRenderFreePicture(dpy, root_pic);
