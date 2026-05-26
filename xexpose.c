@@ -12,6 +12,7 @@
 #include <X11/extensions/Xcomposite.h>
 #include <X11/extensions/Xrender.h>
 #include <X11/extensions/Xfixes.h>
+#include <X11/extensions/Xinerama.h>
 #include <X11/Xft/Xft.h>
 #include <cairo/cairo.h>
 #include <cairo/cairo-xlib.h>
@@ -27,6 +28,10 @@
 
 #define FOCUS_WINDOWS 0
 #define FOCUS_TABS    1
+
+typedef struct {
+    int x, y, w, h;
+} MonitorRect;
 
 typedef struct {
     Window        xwin;
@@ -365,7 +370,7 @@ build_visible(WinInfo *wins, int total, unsigned long tab, int *vis, int max)
 }
 
 static void
-compute_grid_layout(WinInfo *wins, int *vis, int vis_count, int scr_w, int scr_h, int tab_h)
+compute_grid_layout(WinInfo *wins, int *vis, int vis_count, MonitorRect mon, int tab_h)
 {
     if (vis_count == 0) { grid_cols = 1; return; }
 
@@ -373,8 +378,8 @@ compute_grid_layout(WinInfo *wins, int *vis, int vis_count, int scr_w, int scr_h
     int rows = (int)ceil((double)vis_count / cols);
     grid_cols = cols;
 
-    int avail_h = scr_h - tab_h;
-    int cell_w = (scr_w - PADDING * (cols + 1)) / cols;
+    int avail_h = mon.h - tab_h;
+    int cell_w = (mon.w - PADDING * (cols + 1)) / cols;
     int cell_h = (avail_h - PADDING * (rows + 1)) / rows - TITLE_HEIGHT;
 
     for (int vi = 0; vi < vis_count; vi++) {
@@ -390,8 +395,8 @@ compute_grid_layout(WinInfo *wins, int *vis, int vis_count, int scr_w, int scr_h
         int thumb_w = (int)(wins[i].width  * scale);
         int thumb_h = (int)(wins[i].height * scale);
 
-        int cx = PADDING + col * (cell_w + PADDING) + (cell_w - thumb_w) / 2;
-        int cy = PADDING + row * (cell_h + TITLE_HEIGHT + PADDING) + (cell_h - thumb_h) / 2;
+        int cx = mon.x + PADDING + col * (cell_w + PADDING) + (cell_w - thumb_w) / 2;
+        int cy = mon.y + PADDING + row * (cell_h + TITLE_HEIGHT + PADDING) + (cell_h - thumb_h) / 2;
 
         wins[i].cell_x  = cx;
         wins[i].cell_y  = cy;
@@ -540,6 +545,65 @@ get_root_pixmap(void)
     return pm;
 }
 
+static MonitorRect
+get_focused_monitor(void)
+{
+    MonitorRect mon = { 0, 0, DisplayWidth(dpy, scr), DisplayHeight(dpy, scr) };
+
+    int nmons = 0;
+    XineramaScreenInfo *mons = XineramaQueryScreens(dpy, &nmons);
+    if (!mons || nmons <= 1) {
+        if (mons) XFree(mons);
+        return mon;
+    }
+
+    int focus_x = 0, focus_y = 0;
+    int found = 0;
+
+    Atom type;
+    int fmt;
+    unsigned long nitems, bytes;
+    unsigned char *data = NULL;
+    if (XGetWindowProperty(dpy, root, atom_active_window, 0, 1, False,
+                           XA_WINDOW, &type, &fmt, &nitems, &bytes,
+                           &data) == Success && data && nitems > 0) {
+        Window active = *(Window *)data;
+        XFree(data);
+        XWindowAttributes wa;
+        if (XGetWindowAttributes(dpy, active, &wa)) {
+            Window child;
+            XTranslateCoordinates(dpy, active, root, 0, 0,
+                                  &focus_x, &focus_y, &child);
+            found = 1;
+        }
+    } else {
+        if (data) XFree(data);
+    }
+
+    if (!found) {
+        Window qroot, qchild;
+        int rx, ry, wx, wy;
+        unsigned int mask;
+        XQueryPointer(dpy, root, &qroot, &qchild, &rx, &ry, &wx, &wy, &mask);
+        focus_x = rx;
+        focus_y = ry;
+    }
+
+    for (int i = 0; i < nmons; i++) {
+        if (focus_x >= mons[i].x_org && focus_x < mons[i].x_org + mons[i].width &&
+            focus_y >= mons[i].y_org && focus_y < mons[i].y_org + mons[i].height) {
+            mon.x = mons[i].x_org;
+            mon.y = mons[i].y_org;
+            mon.w = mons[i].width;
+            mon.h = mons[i].height;
+            break;
+        }
+    }
+
+    XFree(mons);
+    return mon;
+}
+
 typedef struct {
     int cols, rows;
 } DeskLayout;
@@ -616,9 +680,10 @@ get_desktop_names(int num_desktops, int *out_count)
 
 static void
 render_thumbnails(Window overlay, WinInfo *wins, int *vis, int vis_count,
-                  int scr_w, int scr_h, XftFont *font, int selected,
-                  int num_desktops, char **desk_names, DeskLayout layout,
-                  int cur_tab, int focus_mode, int tab_highlight)
+                  int scr_w, int scr_h, MonitorRect mon, XftFont *font,
+                  int selected, int num_desktops, char **desk_names,
+                  DeskLayout layout, int cur_tab, int focus_mode,
+                  int tab_highlight)
 {
     Visual *dvis = DefaultVisual(dpy, scr);
     int ddepth = DefaultDepth(dpy, scr);
@@ -802,7 +867,7 @@ render_thumbnails(Window overlay, WinInfo *wins, int *vis, int vis_count,
     XftColorFree(dpy, dvis, cmap, &shadow_color);
 
     int tab_total_h = TAB_HEIGHT * layout.rows;
-    int tab_w = scr_w / layout.cols;
+    int tab_w = mon.w / layout.cols;
 
     XRenderColor tab_bg      = { 0x2000, 0x2000, 0x2800, 0xFFFF };
     XRenderColor tab_active  = { 0x4000, 0x4000, 0x5000, 0xFFFF };
@@ -811,8 +876,8 @@ render_thumbnails(Window overlay, WinInfo *wins, int *vis, int vis_count,
     for (int t = 0; t < num_desktops; t++) {
         int tc_col = t % layout.cols;
         int tc_row = t / layout.cols;
-        int tx = tc_col * tab_w;
-        int ty = scr_h - tab_total_h + tc_row * TAB_HEIGHT;
+        int tx = mon.x + tc_col * tab_w;
+        int ty = mon.y + mon.h - tab_total_h + tc_row * TAB_HEIGHT;
 
         XRenderColor *tc;
         if (focus_mode == FOCUS_TABS && t == tab_highlight)
@@ -860,14 +925,15 @@ find_window_at(WinInfo *wins, int *vis, int vis_count, int mx, int my)
 }
 
 static int
-find_tab_at(int mx, int my, int num_desktops, DeskLayout layout, int scr_w, int scr_h)
+find_tab_at(int mx, int my, int num_desktops, DeskLayout layout, MonitorRect mon)
 {
     int tab_total_h = TAB_HEIGHT * layout.rows;
-    if (my < scr_h - tab_total_h)
+    int tab_top = mon.y + mon.h - tab_total_h;
+    if (my < tab_top || mx < mon.x || mx >= mon.x + mon.w)
         return -1;
-    int tab_w = scr_w / layout.cols;
-    int tc_col = mx / tab_w;
-    int tc_row = (my - (scr_h - tab_total_h)) / TAB_HEIGHT;
+    int tab_w = mon.w / layout.cols;
+    int tc_col = (mx - mon.x) / tab_w;
+    int tc_row = (my - tab_top) / TAB_HEIGHT;
     if (tc_col >= layout.cols) tc_col = layout.cols - 1;
     if (tc_row >= layout.rows) tc_row = layout.rows - 1;
     int t = tc_row * layout.cols + tc_col;
@@ -930,6 +996,7 @@ main(int argc, char **argv)
 
     int scr_w = DisplayWidth(dpy, scr);
     int scr_h = DisplayHeight(dpy, scr);
+    MonitorRect mon = get_focused_monitor();
 
     int *vis = calloc(total, sizeof(int));
     int vis_count = build_visible(wins, total, cur_tab, vis, total);
@@ -949,7 +1016,7 @@ main(int argc, char **argv)
         return 0;
     }
 
-    compute_grid_layout(wins, vis, vis_count, scr_w, scr_h, tab_total_h);
+    compute_grid_layout(wins, vis, vis_count, mon, tab_total_h);
     grab_visible_pixmaps(wins, vis, vis_count);
 
     XSetWindowAttributes swa;
@@ -1020,7 +1087,7 @@ main(int argc, char **argv)
     }
 
 #define DO_RENDER() render_thumbnails(overlay, wins, vis, vis_count, \
-    scr_w, scr_h, font, selected, num_desktops, desk_names, \
+    scr_w, scr_h, mon, font, selected, num_desktops, desk_names, \
     desk_layout, cur_tab, focus_mode, tab_highlight)
 
 #define SWITCH_TAB(new_tab) do { \
@@ -1031,7 +1098,7 @@ main(int argc, char **argv)
     vis_count = build_visible(wins, total, cur_tab, vis, total); \
     if (vis_count > 0) \
         wait_for_map(); \
-    compute_grid_layout(wins, vis, vis_count, scr_w, scr_h, tab_total_h); \
+    compute_grid_layout(wins, vis, vis_count, mon, tab_total_h); \
     grab_visible_pixmaps(wins, vis, vis_count); \
     selected = 0; \
     focus_mode = FOCUS_WINDOWS; \
@@ -1056,7 +1123,7 @@ main(int argc, char **argv)
                     mouse_active = 1;
             }
             if (mouse_active) {
-                int tab = find_tab_at(ev.xmotion.x, ev.xmotion.y, num_desktops, desk_layout, scr_w, scr_h);
+                int tab = find_tab_at(ev.xmotion.x, ev.xmotion.y, num_desktops, desk_layout, mon);
                 if (tab >= 0) {
                     if (focus_mode != FOCUS_TABS || tab_highlight != tab) {
                         focus_mode = FOCUS_TABS;
@@ -1076,7 +1143,7 @@ main(int argc, char **argv)
         }
 
         case ButtonPress: {
-            int tab = find_tab_at(ev.xbutton.x, ev.xbutton.y, num_desktops, desk_layout, scr_w, scr_h);
+            int tab = find_tab_at(ev.xbutton.x, ev.xbutton.y, num_desktops, desk_layout, mon);
             if (tab >= 0 && tab != cur_tab) {
                 SWITCH_TAB(tab);
                 DO_RENDER();
