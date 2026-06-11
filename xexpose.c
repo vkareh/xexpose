@@ -24,7 +24,6 @@
 #define BG_ALPHA     0x8000
 
 #define ICON_SIZE   96
-#define ICON_ALPHA  0xB333
 
 #define FOCUS_WINDOWS 0
 #define FOCUS_TABS    1
@@ -724,14 +723,14 @@ render_thumbnails(Window overlay, WinInfo *wins, int *vis, int vis_count,
         XRenderFillRectangle(dpy, PictOpOver, back_pic, &tint,
                              0, 0, scr_w, scr_h);
     } else {
-        XRenderColor bg = { 0x1000, 0x1000, 0x1800, 0xFFFF };
+        XRenderColor bg = { 0x2E2E, 0x3434, 0x3636, 0xFFFF };
         XRenderFillRectangle(dpy, PictOpSrc, back_pic, &bg,
                              0, 0, scr_w, scr_h);
     }
 
-    XRenderColor border_color    = { 0x4000, 0x4000, 0x5000, 0xFFFF };
-    XRenderColor highlight_color = { 0xCCCC, 0xCCCC, 0xFFFF, 0xFFFF };
-    XRenderColor sticky_color    = { 0xDDDD, 0xAAAA, 0x3333, 0xFFFF };
+    XRenderColor border_color    = { 0x5555, 0x5757, 0x5353, 0xFFFF };
+    XRenderColor highlight_color = { 0xEEEE, 0xEEEE, 0xECEC, 0xFFFF };
+    XRenderColor sticky_color    = { 0xEDED, 0xD4D4, 0x0000, 0xFFFF };
 
     XErrorHandler old_handler = XSetErrorHandler(error_handler);
 
@@ -818,7 +817,7 @@ render_thumbnails(Window overlay, WinInfo *wins, int *vis, int vis_count,
 
     XftDraw *xftdraw = XftDrawCreate(dpy, back_pm, dvis, cmap);
     XftColor text_color;
-    XRenderColor rc = { 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF };
+    XRenderColor rc = { 0xEEEE, 0xEEEE, 0xECEC, 0xFFFF };
     XftColorAllocValue(dpy, dvis, cmap, &rc, &text_color);
 
     XftColor shadow_color;
@@ -871,9 +870,13 @@ render_thumbnails(Window overlay, WinInfo *wins, int *vis, int vis_count,
     int tab_total_h = TAB_HEIGHT * layout.rows;
     int tab_w = mon.w / layout.cols;
 
-    XRenderColor tab_bg      = { 0x2000, 0x2000, 0x2800, 0xFFFF };
-    XRenderColor tab_active  = { 0x4000, 0x4000, 0x5000, 0xFFFF };
-    XRenderColor tab_focused = { 0x6000, 0x6000, 0x8000, 0xFFFF };
+    XftColor tab_text_dark;
+    XRenderColor tdc = { 0x2E2E, 0x3434, 0x3636, 0xFFFF };
+    XftColorAllocValue(dpy, dvis, cmap, &tdc, &tab_text_dark);
+
+    XRenderColor tab_bg      = { 0x2E2E, 0x3434, 0x3636, 0xFFFF };
+    XRenderColor tab_active  = { 0x5555, 0x5757, 0x5353, 0xFFFF };
+    XRenderColor tab_focused = { 0xEEEE, 0xEEEE, 0xECEC, 0xFFFF };
 
     for (int t = 0; t < num_desktops; t++) {
         int tc_col = t % layout.cols;
@@ -898,11 +901,13 @@ render_thumbnails(Window overlay, WinInfo *wins, int *vis, int vis_count,
         XftTextExtentsUtf8(dpy, font, (FcChar8 *)name, len, &ext);
         int text_x = tx + (tab_w - ext.xOff) / 2;
         int text_y = ty + (TAB_HEIGHT + font->ascent - font->descent) / 2;
-        XftDrawStringUtf8(xftdraw, &text_color, font,
-                          text_x, text_y, (FcChar8 *)name, len);
+        int is_focused_tab = (focus_mode == FOCUS_TABS && t == tab_highlight);
+        XftDrawStringUtf8(xftdraw, is_focused_tab ? &tab_text_dark : &text_color,
+                          font, text_x, text_y, (FcChar8 *)name, len);
     }
 
     XftDrawDestroy(xftdraw);
+    XftColorFree(dpy, dvis, cmap, &tab_text_dark);
     XftColorFree(dpy, dvis, cmap, &text_color);
 
     GC gc = XCreateGC(dpy, overlay, 0, NULL);
