@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <math.h>
+#include <signal.h>
 #include <unistd.h>
 
 #include <X11/Xlib.h>
@@ -54,6 +55,15 @@ static Display *dpy;
 static int      scr;
 static Window   root;
 static int      grid_cols;
+
+static volatile sig_atomic_t got_signal;
+
+static void
+signal_handler(int sig)
+{
+    (void)sig;
+    got_signal = 1;
+}
 
 static Atom atom_client_list;
 static Atom atom_active_window;
@@ -1207,10 +1217,15 @@ main(int argc, char **argv)
     focus_mode = FOCUS_WINDOWS; \
 } while(0)
 
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
+
     int running = 1;
     while (running) {
+        if (got_signal) break;
         XEvent ev;
         XNextEvent(dpy, &ev);
+        if (got_signal) break;
 
         switch (ev.type) {
         case Expose:
