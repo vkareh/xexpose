@@ -79,6 +79,21 @@ gsettings set org.mate.Marco.global-keybindings run-command-1 '<Super>Tab'
 | Middle-click | Close window (requires `--allow-close`) |
 | Mouse hover | Highlight window or tab |
 
+### X Resources
+
+Appearance can be customized via `~/.Xresources`:
+
+```
+xexpose.foreground:     #eeeeec
+xexpose.background:     #2e3436
+xexpose.borderColor:    #555753
+xexpose.highlightColor: #eeeeec
+xexpose.stickyColor:    #edd400
+xexpose.font:           sans-10
+```
+
+Reload with `xrdb -merge ~/.Xresources`. Wildcard resources like `*foreground` are also respected.
+
 ## License
 
 MIT

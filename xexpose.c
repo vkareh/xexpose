@@ -9,6 +9,7 @@
 #include <X11/Xlib.h>
 #include <X11/Xatom.h>
 #include <X11/Xutil.h>
+#include <X11/Xresource.h>
 #include <X11/keysym.h>
 #include <X11/extensions/Xcomposite.h>
 #include <X11/extensions/Xrender.h>
@@ -106,6 +107,67 @@ intern_atoms(void)
     atom_wm_name          = XInternAtom(dpy, "_NET_WM_NAME", False);
     atom_wm_icon          = XInternAtom(dpy, "_NET_WM_ICON", False);
     atom_utf8_string      = XInternAtom(dpy, "UTF8_STRING", False);
+}
+
+typedef struct {
+    XRenderColor foreground;
+    XRenderColor background;
+    XRenderColor border;
+    XRenderColor highlight;
+    XRenderColor sticky;
+    char         font[256];
+} Config;
+
+static int
+parse_hex_color(const char *str, XRenderColor *out)
+{
+    unsigned int r, g, b;
+    if (str[0] == '#' && strlen(str) == 7 &&
+        sscanf(str, "#%02x%02x%02x", &r, &g, &b) == 3) {
+        out->red   = (unsigned short)(r << 8 | r);
+        out->green = (unsigned short)(g << 8 | g);
+        out->blue  = (unsigned short)(b << 8 | b);
+        out->alpha = 0xFFFF;
+        return 1;
+    }
+    return 0;
+}
+
+static void
+load_config(Config *cfg)
+{
+    /* Tango defaults */
+    parse_hex_color("#eeeeec", &cfg->foreground);
+    parse_hex_color("#2e3436", &cfg->background);
+    parse_hex_color("#555753", &cfg->border);
+    parse_hex_color("#eeeeec", &cfg->highlight);
+    parse_hex_color("#edd400", &cfg->sticky);
+    strncpy(cfg->font, "sans-10", sizeof(cfg->font) - 1);
+
+    XrmInitialize();
+    char *res_str = XResourceManagerString(dpy);
+    if (!res_str) return;
+
+    XrmDatabase db = XrmGetStringDatabase(res_str);
+    if (!db) return;
+
+    char *type;
+    XrmValue val;
+
+    if (XrmGetResource(db, "xexpose.foreground", "Xexpose.Foreground", &type, &val))
+        parse_hex_color(val.addr, &cfg->foreground);
+    if (XrmGetResource(db, "xexpose.background", "Xexpose.Background", &type, &val))
+        parse_hex_color(val.addr, &cfg->background);
+    if (XrmGetResource(db, "xexpose.borderColor", "Xexpose.BorderColor", &type, &val))
+        parse_hex_color(val.addr, &cfg->border);
+    if (XrmGetResource(db, "xexpose.highlightColor", "Xexpose.HighlightColor", &type, &val))
+        parse_hex_color(val.addr, &cfg->highlight);
+    if (XrmGetResource(db, "xexpose.stickyColor", "Xexpose.StickyColor", &type, &val))
+        parse_hex_color(val.addr, &cfg->sticky);
+    if (XrmGetResource(db, "xexpose.font", "Xexpose.Font", &type, &val))
+        strncpy(cfg->font, val.addr, sizeof(cfg->font) - 1);
+
+    XrmDestroyDatabase(db);
 }
 
 static unsigned long
@@ -746,7 +808,8 @@ render_thumbnails(Window overlay, WinInfo *wins, int *vis, int vis_count,
                   int scr_w, int scr_h, MonitorRect mon, XftFont *font,
                   int selected, int num_desktops, char **desk_names,
                   DeskLayout layout, int cur_tab, int focus_mode,
-                  int tab_highlight, int show_all, const char *filter)
+                  int tab_highlight, int show_all, const char *filter,
+                  const Config *cfg)
 {
     Visual *dvis = DefaultVisual(dpy, scr);
     int ddepth = DefaultDepth(dpy, scr);
@@ -785,18 +848,18 @@ render_thumbnails(Window overlay, WinInfo *wins, int *vis, int vis_count,
         XRenderFillRectangle(dpy, PictOpOver, back_pic, &tint,
                              0, 0, scr_w, scr_h);
     } else {
-        XRenderColor bg = { 0x2E2E, 0x3434, 0x3636, 0xFFFF };
+        XRenderColor bg = cfg->background;
         XRenderFillRectangle(dpy, PictOpSrc, back_pic, &bg,
                              0, 0, scr_w, scr_h);
     }
 
-    XRenderColor border_color    = { 0x5555, 0x5757, 0x5353, 0xFFFF };
-    XRenderColor highlight_color = { 0xEEEE, 0xEEEE, 0xECEC, 0xFFFF };
-    XRenderColor sticky_color    = { 0xEDED, 0xD4D4, 0x0000, 0xFFFF };
+    XRenderColor border_color    = cfg->border;
+    XRenderColor highlight_color = cfg->highlight;
+    XRenderColor sticky_color    = cfg->sticky;
 
     XErrorHandler old_handler = XSetErrorHandler(error_handler);
 
-    XRenderColor placeholder_bg = { 0x5555, 0x5757, 0x5353, 0xFFFF };
+    XRenderColor placeholder_bg = cfg->border;
 
     for (int vi = 0; vi < vis_count; vi++) {
         int i = vis[vi];
@@ -917,7 +980,7 @@ render_thumbnails(Window overlay, WinInfo *wins, int *vis, int vis_count,
 
     XftDraw *xftdraw = XftDrawCreate(dpy, back_pm, dvis, cmap);
     XftColor text_color;
-    XRenderColor rc = { 0xEEEE, 0xEEEE, 0xECEC, 0xFFFF };
+    XRenderColor rc = cfg->foreground;
     XftColorAllocValue(dpy, dvis, cmap, &rc, &text_color);
 
     XftColor shadow_color;
@@ -968,7 +1031,7 @@ render_thumbnails(Window overlay, WinInfo *wins, int *vis, int vis_count,
     XftColorFree(dpy, dvis, cmap, &shadow_color);
 
     if (filter[0]) {
-        XRenderColor filter_bg = { 0x2E2E, 0x3434, 0x3636, 0xFFFF };
+        XRenderColor filter_bg = cfg->background;
         XRenderFillRectangle(dpy, PictOpSrc, back_pic, &filter_bg,
                              mon.x, mon.y, mon.w, TITLE_HEIGHT + PADDING);
 
@@ -986,12 +1049,12 @@ render_thumbnails(Window overlay, WinInfo *wins, int *vis, int vis_count,
 
     if (!show_all) {
         XftColor tab_text_dark;
-        XRenderColor tdc = { 0x2E2E, 0x3434, 0x3636, 0xFFFF };
+        XRenderColor tdc = cfg->background;
         XftColorAllocValue(dpy, dvis, cmap, &tdc, &tab_text_dark);
 
-        XRenderColor tab_bg      = { 0x2E2E, 0x3434, 0x3636, 0xFFFF };
-        XRenderColor tab_active  = { 0x5555, 0x5757, 0x5353, 0xFFFF };
-        XRenderColor tab_focused = { 0xEEEE, 0xEEEE, 0xECEC, 0xFFFF };
+        XRenderColor tab_bg      = cfg->background;
+        XRenderColor tab_active  = cfg->border;
+        XRenderColor tab_focused = cfg->highlight;
 
         for (int t = 0; t < num_desktops; t++) {
             int tc_col = t % layout.cols;
@@ -1107,6 +1170,9 @@ main(int argc, char **argv)
 
     intern_atoms();
 
+    Config cfg;
+    load_config(&cfg);
+
     int num_desktops = (int)get_cardinal(root, atom_num_desktops);
     if (num_desktops < 1) num_desktops = 1;
 
@@ -1177,7 +1243,9 @@ main(int argc, char **argv)
                  GrabModeAsync, GrabModeAsync,
                  overlay, None, CurrentTime);
 
-    XftFont *font = XftFontOpenName(dpy, scr, "sans-10");
+    XftFont *font = XftFontOpenName(dpy, scr, cfg.font);
+    if (!font)
+        font = XftFontOpenName(dpy, scr, "sans-10");
     if (!font)
         font = XftFontOpenName(dpy, scr, "fixed");
     if (!font) {
@@ -1227,7 +1295,7 @@ main(int argc, char **argv)
 
 #define DO_RENDER() render_thumbnails(overlay, wins, vis, vis_count, \
     scr_w, scr_h, mon, font, selected, num_desktops, desk_names, \
-    desk_layout, cur_tab, focus_mode, tab_highlight, show_all, filter)
+    desk_layout, cur_tab, focus_mode, tab_highlight, show_all, filter, &cfg)
 
 #define REFILTER() do { \
     ungrab_visible_pixmaps(wins, vis, vis_count); \
