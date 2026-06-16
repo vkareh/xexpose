@@ -1257,7 +1257,7 @@ main(int argc, char **argv)
 
     XSetWindowAttributes swa;
     swa.override_redirect = True;
-    swa.event_mask = ExposureMask | ButtonPressMask | KeyPressMask | KeyReleaseMask | PointerMotionMask;
+    swa.event_mask = ExposureMask | ButtonPressMask | KeyPressMask | KeyReleaseMask | PointerMotionMask | FocusChangeMask;
     swa.background_pixel = BlackPixel(dpy, scr);
 
     Window overlay = XCreateWindow(dpy, root,
@@ -1268,11 +1268,27 @@ main(int argc, char **argv)
 
     XMapRaised(dpy, overlay);
 
-    XGrabKeyboard(dpy, overlay, True, GrabModeAsync, GrabModeAsync, CurrentTime);
-    XGrabPointer(dpy, overlay, True,
-                 ButtonPressMask | PointerMotionMask,
-                 GrabModeAsync, GrabModeAsync,
-                 overlay, None, CurrentTime);
+    int exit_code = 0;
+
+    if (XGrabKeyboard(dpy, overlay, True, GrabModeAsync, GrabModeAsync,
+                      CurrentTime) != GrabSuccess) {
+        fprintf(stderr, "xexpose: cannot grab keyboard\n");
+        ungrab_visible_pixmaps(wins, vis, vis_count);
+        XDestroyWindow(dpy, overlay);
+        exit_code = 1;
+        goto cleanup;
+    }
+    if (XGrabPointer(dpy, overlay, True,
+                     ButtonPressMask | PointerMotionMask,
+                     GrabModeAsync, GrabModeAsync,
+                     overlay, None, CurrentTime) != GrabSuccess) {
+        fprintf(stderr, "xexpose: cannot grab pointer\n");
+        XUngrabKeyboard(dpy, CurrentTime);
+        ungrab_visible_pixmaps(wins, vis, vis_count);
+        XDestroyWindow(dpy, overlay);
+        exit_code = 1;
+        goto cleanup;
+    }
 
     XftFont *font = XftFontOpenName(dpy, scr, cfg.font);
     if (!font)
@@ -1281,8 +1297,8 @@ main(int argc, char **argv)
         font = XftFontOpenName(dpy, scr, "fixed");
     if (!font) {
         fprintf(stderr, "xexpose: cannot open any font\n");
-        ungrab_visible_pixmaps(wins, vis, vis_count);
         XDestroyWindow(dpy, overlay);
+        exit_code = 1;
         goto cleanup;
     }
 
@@ -1597,6 +1613,11 @@ main(int argc, char **argv)
             }
             break;
         }
+
+        case FocusOut:
+            if (ev.xfocus.mode == NotifyNormal)
+                running = 0;
+            break;
         }
     }
 
@@ -1622,5 +1643,5 @@ cleanup:
     free(desk_names);
 
     XCloseDisplay(dpy);
-    return 0;
+    return exit_code;
 }
