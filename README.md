@@ -44,12 +44,13 @@ sudo make install
 ## Usage
 
 ```
-xexpose [-a|--all]
+xexpose [-a|--all] [--allow-close]
 ```
 
 | Option | Description |
 |--------|-------------|
 | `-a`, `--all` | Show windows from all workspaces in a single grid |
+| `--allow-close` | Enable middle-click to close windows |
 
 Bind it to a key in your window manager for quick access. For example, in marco:
 
@@ -65,11 +66,13 @@ gsettings set org.mate.Marco.global-keybindings run-command-1 '<Super>Tab'
 | Arrow keys | Navigate between window thumbnails |
 | Tab / Shift+Tab | Cycle through windows (wraps around) |
 | Enter | Activate selected window |
+| Delete | Close selected window (requires `--allow-close`) |
 | Escape | Close picker |
 | PgUp / PgDn | Switch workspace |
 | Down (from bottom row) | Enter workspace tab navigation |
 | Super hold + Tab | Cycle windows, release Super to activate |
 | Mouse click | Activate clicked window or switch workspace tab |
+| Middle-click | Close window (requires `--allow-close`) |
 | Mouse hover | Highlight window or tab |
 
 ## License

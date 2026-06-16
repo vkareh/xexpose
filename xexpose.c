@@ -57,6 +57,7 @@ static int      grid_cols;
 
 static Atom atom_client_list;
 static Atom atom_active_window;
+static Atom atom_close_window;
 static Atom atom_wm_desktop;
 static Atom atom_cur_desktop;
 static Atom atom_num_desktops;
@@ -78,6 +79,7 @@ intern_atoms(void)
 {
     atom_client_list      = XInternAtom(dpy, "_NET_CLIENT_LIST", False);
     atom_active_window    = XInternAtom(dpy, "_NET_ACTIVE_WINDOW", False);
+    atom_close_window     = XInternAtom(dpy, "_NET_CLOSE_WINDOW", False);
     atom_wm_desktop       = XInternAtom(dpy, "_NET_WM_DESKTOP", False);
     atom_cur_desktop      = XInternAtom(dpy, "_NET_CURRENT_DESKTOP", False);
     atom_num_desktops     = XInternAtom(dpy, "_NET_NUMBER_OF_DESKTOPS", False);
@@ -489,6 +491,23 @@ activate_window(Window win, unsigned long desktop, Time timestamp)
     ev.xclient.data.l[0]    = 2;
     ev.xclient.data.l[1]    = (long)timestamp;
     ev.xclient.data.l[2]    = 0;
+
+    XSendEvent(dpy, root, False,
+               SubstructureNotifyMask | SubstructureRedirectMask, &ev);
+    XFlush(dpy);
+}
+
+static void
+close_window(Window win, Time timestamp)
+{
+    XEvent ev;
+    memset(&ev, 0, sizeof(ev));
+    ev.xclient.type         = ClientMessage;
+    ev.xclient.window       = win;
+    ev.xclient.message_type = atom_close_window;
+    ev.xclient.format       = 32;
+    ev.xclient.data.l[0]    = (long)timestamp;
+    ev.xclient.data.l[1]    = 2;
 
     XSendEvent(dpy, root, False,
                SubstructureNotifyMask | SubstructureRedirectMask, &ev);
@@ -994,11 +1013,14 @@ int
 main(int argc, char **argv)
 {
     int show_all = 0;
+    int allow_close = 0;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-a") == 0 || strcmp(argv[i], "--all") == 0)
             show_all = 1;
+        else if (strcmp(argv[i], "--allow-close") == 0)
+            allow_close = 1;
         else {
-            fprintf(stderr, "Usage: xexpose [-a|--all]\n");
+            fprintf(stderr, "Usage: xexpose [-a|--all] [--allow-close]\n");
             return 1;
         }
     }
@@ -1146,6 +1168,31 @@ main(int argc, char **argv)
     scr_w, scr_h, mon, font, selected, num_desktops, desk_names, \
     desk_layout, cur_tab, focus_mode, tab_highlight, show_all)
 
+#define CLOSE_WINDOW(idx, timestamp) do { \
+    int _wi = vis[(idx)]; \
+    close_window(wins[_wi].xwin, (timestamp)); \
+    if (wins[_wi].pixmap != None) { \
+        XCompositeUnredirectWindow(dpy, wins[_wi].frame, CompositeRedirectAutomatic); \
+        XFreePixmap(dpy, wins[_wi].pixmap); \
+        wins[_wi].pixmap = None; \
+    } \
+    if (wins[_wi].icon_pic != None) { \
+        XRenderFreePicture(dpy, wins[_wi].icon_pic); \
+        wins[_wi].icon_pic = None; \
+    } \
+    if (wins[_wi].icon_pm != None) { \
+        XFreePixmap(dpy, wins[_wi].icon_pm); \
+        wins[_wi].icon_pm = None; \
+    } \
+    for (int _v = (idx); _v < vis_count - 1; _v++) \
+        vis[_v] = vis[_v + 1]; \
+    vis_count--; \
+    if (vis_count == 0) { running = 0; break; } \
+    if (selected >= vis_count) selected = vis_count - 1; \
+    compute_grid_layout(wins, vis, vis_count, mon, tab_total_h); \
+    DO_RENDER(); \
+} while(0)
+
 #define SWITCH_TAB(new_tab) do { \
     ungrab_visible_pixmaps(wins, vis, vis_count); \
     cur_tab = (new_tab); \
@@ -1199,6 +1246,13 @@ main(int argc, char **argv)
         }
 
         case ButtonPress: {
+            if (allow_close && ev.xbutton.button == Button2) {
+                int idx = find_window_at(wins, vis, vis_count, ev.xbutton.x, ev.xbutton.y);
+                if (idx >= 0)
+                    CLOSE_WINDOW(idx, ev.xbutton.time);
+                break;
+            }
+
             int tab = show_all ? -1 : find_tab_at(ev.xbutton.x, ev.xbutton.y, num_desktops, desk_layout, mon);
             if (tab >= 0 && tab != cur_tab) {
                 SWITCH_TAB(tab);
@@ -1324,6 +1378,10 @@ main(int argc, char **argv)
                         SWITCH_TAB(cur_tab - 1);
                         redraw = 1;
                     }
+                    break;
+                case XK_Delete:
+                    if (allow_close && vis_count > 0)
+                        CLOSE_WINDOW(selected, ev.xkey.time);
                     break;
                 }
             }
