@@ -1138,8 +1138,39 @@ main(int argc, char **argv)
             show_all = 1;
         else if (strcmp(argv[i], "--allow-close") == 0)
             allow_close = 1;
-        else {
-            fprintf(stderr, "Usage: xexpose [-a|--all] [--allow-close]\n");
+        else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+            printf("Usage: xexpose [-a|--all] [--allow-close]\n"
+                   "\n"
+                   "Lightweight window picker for X11.\n"
+                   "\n"
+                   "Options:\n"
+                   "  -a, --all       Show windows from all workspaces\n"
+                   "  --allow-close   Enable middle-click and Delete to close windows\n"
+                   "  -h, --help      Show this help\n"
+                   "  -v, --version   Show version\n"
+                   "\n"
+                   "Controls:\n"
+                   "  Arrows          Navigate between thumbnails\n"
+                   "  Tab/Shift+Tab   Cycle through windows\n"
+                   "  Enter           Activate selected window\n"
+                   "  Escape          Close picker\n"
+                   "  PgUp/PgDn       Switch workspace\n"
+                   "  Type            Filter windows by title or class\n"
+                   "  Backspace       Remove last filter character\n"
+                   "  Ctrl+Backspace  Clear filter\n"
+                   "  Delete          Close selected window (--allow-close)\n"
+                   "  Middle-click    Close clicked window (--allow-close)\n"
+                   "\n"
+                   "Appearance can be customized via X resources:\n"
+                   "  xexpose.foreground, xexpose.background, xexpose.borderColor,\n"
+                   "  xexpose.highlightColor, xexpose.stickyColor, xexpose.font\n");
+            return 0;
+        } else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--version") == 0) {
+            printf("xexpose 1.0\n");
+            return 0;
+        } else {
+            fprintf(stderr, "xexpose: unknown option '%s'\n"
+                            "Try 'xexpose --help' for more information.\n", argv[i]);
             return 1;
         }
     }

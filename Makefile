@@ -1,5 +1,6 @@
-PREFIX ?= /usr/local
-BINDIR ?= $(PREFIX)/bin
+PREFIX  ?= /usr/local
+BINDIR  ?= $(PREFIX)/bin
+MANDIR  ?= $(PREFIX)/share/man/man1
 
 CC ?= gcc
 CFLAGS  ?= -Wall -Wextra -O2
@@ -16,9 +17,11 @@ clean:
 
 install: xexpose
 	install -Dm755 xexpose $(DESTDIR)$(BINDIR)/xexpose
+	install -Dm644 xexpose.1 $(DESTDIR)$(MANDIR)/xexpose.1
 
 uninstall:
 	rm -f $(DESTDIR)$(BINDIR)/xexpose
+	rm -f $(DESTDIR)$(MANDIR)/xexpose.1
 
 help:
 	@echo "Targets:"
@@ -28,6 +31,6 @@ help:
 	@echo "  uninstall Remove xexpose from $(DESTDIR)$(BINDIR)"
 	@echo ""
 	@echo "Variables:"
-	@echo "  PREFIX=$(PREFIX)    BINDIR=$(BINDIR)"
+	@echo "  PREFIX=$(PREFIX)  BINDIR=$(BINDIR)  MANDIR=$(MANDIR)"
 
 .PHONY: all clean install uninstall help

@@ -1,0 +1,127 @@
+.TH XEXPOSE 1 "2025-06-16" "xexpose 1.0" "User Commands"
+.SH NAME
+xexpose \- lightweight window picker for X11
+.SH SYNOPSIS
+.B xexpose
+.RB [ \-a | \-\-all ]
+.RB [ \-\-allow\-close ]
+.SH DESCRIPTION
+.B xexpose
+shows live thumbnails of all windows in a grid overlay, letting you
+quickly switch between them. It works with any EWMH\-compliant X11
+window manager.
+.PP
+Windows are displayed as scaled thumbnails with application icons and
+titles. The current workspace is shown by default, with tabs at the
+bottom for switching between workspaces.
+.SH OPTIONS
+.TP
+.BR \-a ", " \-\-all
+Show windows from all workspaces in a single grid. Windows on other
+desktops that cannot provide composite pixmaps are shown as placeholders
+with a centered application icon.
+.TP
+.B \-\-allow\-close
+Enable closing windows from the picker via middle\-click or the Delete key.
+Disabled by default to prevent accidental closes.
+.TP
+.BR \-h ", " \-\-help
+Show usage information and exit.
+.TP
+.BR \-v ", " \-\-version
+Show version and exit.
+.SH CONTROLS
+.SS Keyboard
+.TP
+.B Arrow keys
+Navigate between window thumbnails.
+.TP
+.BR Tab ", " Shift+Tab
+Cycle through windows (wraps around).
+.TP
+.B Enter
+Activate the selected window.
+.TP
+.B Escape
+Close the picker.
+.TP
+.BR PgUp ", " PgDn
+Switch workspace.
+.TP
+.B Down (from bottom row)
+Enter workspace tab navigation.
+.TP
+.B Super hold + Tab
+Cycle windows; release Super to activate.
+.TP
+.B Type characters
+Filter windows by title or WM class (case\-insensitive substring match).
+.TP
+.B Backspace
+Remove the last filter character.
+.TP
+.B Ctrl+Backspace
+Clear the filter.
+.TP
+.B Delete
+Close the selected window (requires \fB\-\-allow\-close\fR).
+.SS Mouse
+.TP
+.B Click
+Activate the clicked window or switch workspace tab.
+.TP
+.B Middle\-click
+Close the clicked window (requires \fB\-\-allow\-close\fR).
+.TP
+.B Hover
+Highlight window or tab under the pointer.
+.SH X RESOURCES
+Appearance can be customized via X resources
+.RB ( ~/.Xresources ).
+The following resources are supported:
+.TP
+.B xexpose.foreground
+Text color. Default: \fB#eeeeec\fR
+.TP
+.B xexpose.background
+Background color for tabs, filter bar, and fallback when no wallpaper is set.
+Default: \fB#2e3436\fR
+.TP
+.B xexpose.borderColor
+Window thumbnail border and active tab color.
+Default: \fB#555753\fR
+.TP
+.B xexpose.highlightColor
+Selected window border and focused tab color.
+Default: \fB#eeeeec\fR
+.TP
+.B xexpose.stickyColor
+Border color for sticky (on\-all\-desktops) windows.
+Default: \fB#edd400\fR
+.TP
+.B xexpose.font
+Xft font name for titles and labels. Default: \fBsans\-10\fR.
+.PP
+Wildcard resources such as \fB*foreground\fR are also resolved through
+Xrm's standard lookup rules.
+.SH EXAMPLES
+Bind to a key in marco:
+.PP
+.nf
+gsettings set org.mate.Marco.keybinding\-commands command\-1 'xexpose'
+gsettings set org.mate.Marco.global\-keybindings run\-command\-1 '<Super>Tab'
+.fi
+.PP
+Show all workspaces with close enabled:
+.PP
+.nf
+xexpose \-\-all \-\-allow\-close
+.fi
+.SH DEPENDENCIES
+Xlib, XComposite (>= 0.3), XRender, Xfixes, Xft, Xinerama, Cairo.
+.SH LICENSE
+MIT
+.SH SEE ALSO
+.BR xdotool (1),
+.BR wmctrl (1),
+.BR xrdb (1)
