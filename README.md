@@ -44,8 +44,12 @@ sudo make install
 ## Usage
 
 ```
-xexpose
+xexpose [-a|--all]
 ```
+
+| Option | Description |
+|--------|-------------|
+| `-a`, `--all` | Show windows from all workspaces in a single grid |
 
 Bind it to a key in your window manager for quick access. For example, in marco:
 

@@ -358,11 +358,12 @@ get_window_list(WinInfo **out, int *out_count)
 }
 
 static int
-build_visible(WinInfo *wins, int total, unsigned long tab, int *vis, int max)
+build_visible(WinInfo *wins, int total, unsigned long tab, int *vis, int max,
+              int show_all)
 {
     int n = 0;
     for (int i = 0; i < total && n < max; i++) {
-        if (wins[i].desktop == tab || wins[i].desktop == ~0UL)
+        if (show_all || wins[i].desktop == tab || wins[i].desktop == ~0UL)
             vis[n++] = i;
     }
     return n;
@@ -684,7 +685,7 @@ render_thumbnails(Window overlay, WinInfo *wins, int *vis, int vis_count,
                   int scr_w, int scr_h, MonitorRect mon, XftFont *font,
                   int selected, int num_desktops, char **desk_names,
                   DeskLayout layout, int cur_tab, int focus_mode,
-                  int tab_highlight)
+                  int tab_highlight, int show_all)
 {
     Visual *dvis = DefaultVisual(dpy, scr);
     int ddepth = DefaultDepth(dpy, scr);
@@ -734,10 +735,60 @@ render_thumbnails(Window overlay, WinInfo *wins, int *vis, int vis_count,
 
     XErrorHandler old_handler = XSetErrorHandler(error_handler);
 
+    XRenderColor placeholder_bg = { 0x5555, 0x5757, 0x5353, 0xFFFF };
+
     for (int vi = 0; vi < vis_count; vi++) {
         int i = vis[vi];
-        if (wins[i].pixmap == None)
+
+        int is_selected = (focus_mode == FOCUS_WINDOWS && vi == selected);
+        int is_sticky = (wins[i].desktop == ~0UL);
+        XRenderColor *bc = is_selected ? &highlight_color
+                         : is_sticky   ? &sticky_color
+                         :               &border_color;
+        int bw = is_selected ? 4 : is_sticky ? 3 : 2;
+
+        XRenderFillRectangle(dpy, PictOpOver, back_pic, bc,
+                             wins[i].cell_x - bw, wins[i].cell_y - bw,
+                             wins[i].thumb_w + bw * 2, wins[i].thumb_h + bw * 2);
+
+        if (wins[i].pixmap == None) {
+            /* Placeholder for unmapped windows (e.g. on other desktops) */
+            XRenderFillRectangle(dpy, PictOpSrc, back_pic, &placeholder_bg,
+                                 wins[i].cell_x, wins[i].cell_y,
+                                 wins[i].thumb_w, wins[i].thumb_h);
+
+            if (wins[i].icon_pic != None) {
+                int iw = ICON_SIZE, ih = ICON_SIZE;
+                if (iw > wins[i].thumb_w - 16) iw = wins[i].thumb_w - 16;
+                if (ih > wins[i].thumb_h - 16) ih = wins[i].thumb_h - 16;
+                if (iw < 16) iw = 16;
+                if (ih < 16) ih = 16;
+
+                if (wins[i].icon_w != iw || wins[i].icon_h != ih) {
+                    XTransform ixform = {{
+                        { XDoubleToFixed((double)wins[i].icon_w / iw), 0, 0 },
+                        { 0, XDoubleToFixed((double)wins[i].icon_h / ih), 0 },
+                        { 0, 0, XDoubleToFixed(1.0) }
+                    }};
+                    XRenderSetPictureTransform(dpy, wins[i].icon_pic, &ixform);
+                    XRenderSetPictureFilter(dpy, wins[i].icon_pic, FilterBilinear, NULL, 0);
+                }
+
+                int ix = wins[i].cell_x + (wins[i].thumb_w - iw) / 2;
+                int iy = wins[i].cell_y + (wins[i].thumb_h - ih) / 2;
+
+                XRenderComposite(dpy, PictOpOver, wins[i].icon_pic, None, back_pic,
+                                 0, 0, 0, 0, ix, iy, iw, ih);
+            }
+
+            if (!is_selected) {
+                XRenderColor dim = { 0x0000, 0x0000, 0x0000, 0x3000 };
+                XRenderFillRectangle(dpy, PictOpOver, back_pic, &dim,
+                                     wins[i].cell_x, wins[i].cell_y,
+                                     wins[i].thumb_w, wins[i].thumb_h);
+            }
             continue;
+        }
 
         XRenderPictFormat *fmt_win = XRenderFindVisualFormat(dpy,
             wins[i].visual);
@@ -763,17 +814,6 @@ render_thumbnails(Window overlay, WinInfo *wins, int *vis, int vis_count,
         }};
         XRenderSetPictureTransform(dpy, src, &xform);
         XRenderSetPictureFilter(dpy, src, FilterBilinear, NULL, 0);
-
-        int is_selected = (focus_mode == FOCUS_WINDOWS && vi == selected);
-        int is_sticky = (wins[i].desktop == ~0UL);
-        XRenderColor *bc = is_selected ? &highlight_color
-                         : is_sticky   ? &sticky_color
-                         :               &border_color;
-        int bw = is_selected ? 4 : is_sticky ? 3 : 2;
-
-        XRenderFillRectangle(dpy, PictOpOver, back_pic, bc,
-                             wins[i].cell_x - bw, wins[i].cell_y - bw,
-                             wins[i].thumb_w + bw * 2, wins[i].thumb_h + bw * 2);
 
         XRenderComposite(dpy, PictOpOver, src, None, back_pic,
                          0, 0, 0, 0,
@@ -808,7 +848,6 @@ render_thumbnails(Window overlay, WinInfo *wins, int *vis, int vis_count,
             XRenderComposite(dpy, PictOpOver, wins[i].icon_pic, None, back_pic,
                              0, 0, 0, 0, ix, iy, iw, ih);
         }
-
 
         XRenderFreePicture(dpy, src);
     }
@@ -870,44 +909,47 @@ render_thumbnails(Window overlay, WinInfo *wins, int *vis, int vis_count,
     int tab_total_h = TAB_HEIGHT * layout.rows;
     int tab_w = mon.w / layout.cols;
 
-    XftColor tab_text_dark;
-    XRenderColor tdc = { 0x2E2E, 0x3434, 0x3636, 0xFFFF };
-    XftColorAllocValue(dpy, dvis, cmap, &tdc, &tab_text_dark);
+    if (!show_all) {
+        XftColor tab_text_dark;
+        XRenderColor tdc = { 0x2E2E, 0x3434, 0x3636, 0xFFFF };
+        XftColorAllocValue(dpy, dvis, cmap, &tdc, &tab_text_dark);
 
-    XRenderColor tab_bg      = { 0x2E2E, 0x3434, 0x3636, 0xFFFF };
-    XRenderColor tab_active  = { 0x5555, 0x5757, 0x5353, 0xFFFF };
-    XRenderColor tab_focused = { 0xEEEE, 0xEEEE, 0xECEC, 0xFFFF };
+        XRenderColor tab_bg      = { 0x2E2E, 0x3434, 0x3636, 0xFFFF };
+        XRenderColor tab_active  = { 0x5555, 0x5757, 0x5353, 0xFFFF };
+        XRenderColor tab_focused = { 0xEEEE, 0xEEEE, 0xECEC, 0xFFFF };
 
-    for (int t = 0; t < num_desktops; t++) {
-        int tc_col = t % layout.cols;
-        int tc_row = t / layout.cols;
-        int tx = mon.x + tc_col * tab_w;
-        int ty = mon.y + mon.h - tab_total_h + tc_row * TAB_HEIGHT;
+        for (int t = 0; t < num_desktops; t++) {
+            int tc_col = t % layout.cols;
+            int tc_row = t / layout.cols;
+            int tx = mon.x + tc_col * tab_w;
+            int ty = mon.y + mon.h - tab_total_h + tc_row * TAB_HEIGHT;
 
-        XRenderColor *tc;
-        if (focus_mode == FOCUS_TABS && t == tab_highlight)
-            tc = &tab_focused;
-        else if (t == cur_tab)
-            tc = &tab_active;
-        else
-            tc = &tab_bg;
+            XRenderColor *tc;
+            if (focus_mode == FOCUS_TABS && t == tab_highlight)
+                tc = &tab_focused;
+            else if (t == cur_tab)
+                tc = &tab_active;
+            else
+                tc = &tab_bg;
 
-        XRenderFillRectangle(dpy, PictOpSrc, back_pic, tc,
-                             tx, ty, tab_w - 1, TAB_HEIGHT - 1);
+            XRenderFillRectangle(dpy, PictOpSrc, back_pic, tc,
+                                 tx, ty, tab_w - 1, TAB_HEIGHT - 1);
 
-        char *name = desk_names[t];
-        int len = strlen(name);
-        XGlyphInfo ext;
-        XftTextExtentsUtf8(dpy, font, (FcChar8 *)name, len, &ext);
-        int text_x = tx + (tab_w - ext.xOff) / 2;
-        int text_y = ty + (TAB_HEIGHT + font->ascent - font->descent) / 2;
-        int is_focused_tab = (focus_mode == FOCUS_TABS && t == tab_highlight);
-        XftDrawStringUtf8(xftdraw, is_focused_tab ? &tab_text_dark : &text_color,
-                          font, text_x, text_y, (FcChar8 *)name, len);
+            char *name = desk_names[t];
+            int len = strlen(name);
+            XGlyphInfo ext;
+            XftTextExtentsUtf8(dpy, font, (FcChar8 *)name, len, &ext);
+            int text_x = tx + (tab_w - ext.xOff) / 2;
+            int text_y = ty + (TAB_HEIGHT + font->ascent - font->descent) / 2;
+            int is_focused_tab = (focus_mode == FOCUS_TABS && t == tab_highlight);
+            XftDrawStringUtf8(xftdraw, is_focused_tab ? &tab_text_dark : &text_color,
+                              font, text_x, text_y, (FcChar8 *)name, len);
+        }
+
+        XftColorFree(dpy, dvis, cmap, &tab_text_dark);
     }
 
     XftDrawDestroy(xftdraw);
-    XftColorFree(dpy, dvis, cmap, &tab_text_dark);
     XftColorFree(dpy, dvis, cmap, &text_color);
 
     GC gc = XCreateGC(dpy, overlay, 0, NULL);
@@ -951,8 +993,15 @@ find_tab_at(int mx, int my, int num_desktops, DeskLayout layout, MonitorRect mon
 int
 main(int argc, char **argv)
 {
-    (void)argc;
-    (void)argv;
+    int show_all = 0;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-a") == 0 || strcmp(argv[i], "--all") == 0)
+            show_all = 1;
+        else {
+            fprintf(stderr, "Usage: xexpose [-a|--all]\n");
+            return 1;
+        }
+    }
 
     dpy = XOpenDisplay(NULL);
     if (!dpy) {
@@ -988,7 +1037,7 @@ main(int argc, char **argv)
     DeskLayout desk_layout = get_desktop_layout(num_desktops);
 
     unsigned long cur_desktop = get_cardinal(root, atom_cur_desktop);
-    int tab_total_h = TAB_HEIGHT * desk_layout.rows;
+    int tab_total_h = show_all ? 0 : TAB_HEIGHT * desk_layout.rows;
     int cur_tab = (int)cur_desktop;
 
     WinInfo *wins = NULL;
@@ -1006,9 +1055,9 @@ main(int argc, char **argv)
     MonitorRect mon = get_focused_monitor();
 
     int *vis = calloc(total, sizeof(int));
-    int vis_count = build_visible(wins, total, cur_tab, vis, total);
+    int vis_count = build_visible(wins, total, cur_tab, vis, total, show_all);
 
-    if (vis_count == 1 && num_desktops == 1) {
+    if (vis_count == 1 && (show_all || num_desktops == 1)) {
         activate_window(wins[vis[0]].xwin, wins[vis[0]].desktop, CurrentTime);
         for (int i = 0; i < total; i++) {
             free(wins[i].title);
@@ -1095,14 +1144,14 @@ main(int argc, char **argv)
 
 #define DO_RENDER() render_thumbnails(overlay, wins, vis, vis_count, \
     scr_w, scr_h, mon, font, selected, num_desktops, desk_names, \
-    desk_layout, cur_tab, focus_mode, tab_highlight)
+    desk_layout, cur_tab, focus_mode, tab_highlight, show_all)
 
 #define SWITCH_TAB(new_tab) do { \
     ungrab_visible_pixmaps(wins, vis, vis_count); \
     cur_tab = (new_tab); \
     tab_highlight = cur_tab; \
     switch_desktop(cur_tab); \
-    vis_count = build_visible(wins, total, cur_tab, vis, total); \
+    vis_count = build_visible(wins, total, cur_tab, vis, total, 0); \
     if (vis_count > 0) \
         wait_for_map(); \
     compute_grid_layout(wins, vis, vis_count, mon, tab_total_h); \
@@ -1130,7 +1179,7 @@ main(int argc, char **argv)
                     mouse_active = 1;
             }
             if (mouse_active) {
-                int tab = find_tab_at(ev.xmotion.x, ev.xmotion.y, num_desktops, desk_layout, mon);
+                int tab = show_all ? -1 : find_tab_at(ev.xmotion.x, ev.xmotion.y, num_desktops, desk_layout, mon);
                 if (tab >= 0) {
                     if (focus_mode != FOCUS_TABS || tab_highlight != tab) {
                         focus_mode = FOCUS_TABS;
@@ -1150,7 +1199,7 @@ main(int argc, char **argv)
         }
 
         case ButtonPress: {
-            int tab = find_tab_at(ev.xbutton.x, ev.xbutton.y, num_desktops, desk_layout, mon);
+            int tab = show_all ? -1 : find_tab_at(ev.xbutton.x, ev.xbutton.y, num_desktops, desk_layout, mon);
             if (tab >= 0 && tab != cur_tab) {
                 SWITCH_TAB(tab);
                 DO_RENDER();
@@ -1248,7 +1297,7 @@ main(int argc, char **argv)
                     if (selected + grid_cols < vis_count) {
                         selected += grid_cols;
                         redraw = 1;
-                    } else if (num_desktops > 1) {
+                    } else if (!show_all && num_desktops > 1) {
                         focus_mode = FOCUS_TABS;
                         tab_highlight = cur_tab;
                         redraw = 1;
@@ -1265,13 +1314,13 @@ main(int argc, char **argv)
                     redraw = 1;
                     break;
                 case XK_Page_Down:
-                    if (cur_tab < num_desktops - 1) {
+                    if (!show_all && cur_tab < num_desktops - 1) {
                         SWITCH_TAB(cur_tab + 1);
                         redraw = 1;
                     }
                     break;
                 case XK_Page_Up:
-                    if (cur_tab > 0) {
+                    if (!show_all && cur_tab > 0) {
                         SWITCH_TAB(cur_tab - 1);
                         redraw = 1;
                     }
