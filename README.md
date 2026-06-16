@@ -11,6 +11,7 @@ Should work with any EWMH-compliant X11 window manager like marco, metacity, kwi
 - Live window thumbnails via XComposite
 - Workspace tabs with spatial navigation matching your desktop layout
 - Keyboard navigation (arrows, Tab, Enter, Escape, PgUp/PgDn)
+- Type-to-filter: narrow windows by title as you type
 - Alt-Tab-like cycling (hold Super, press Tab to cycle, release to activate)
 - Mouse hover selection with click to activate
 - Application icons overlaid on thumbnails
@@ -67,6 +68,9 @@ gsettings set org.mate.Marco.global-keybindings run-command-1 '<Super>Tab'
 | Tab / Shift+Tab | Cycle through windows (wraps around) |
 | Enter | Activate selected window |
 | Delete | Close selected window (requires `--allow-close`) |
+| Type characters | Filter windows by title |
+| Backspace | Remove last filter character |
+| Ctrl+Backspace | Clear filter |
 | Escape | Close picker |
 | PgUp / PgDn | Switch workspace |
 | Down (from bottom row) | Enter workspace tab navigation |

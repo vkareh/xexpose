@@ -47,6 +47,7 @@ typedef struct {
     unsigned      pw, ph;
     unsigned long desktop;
     char         *title;
+    char         *wm_class;
     int           cell_x, cell_y;
     int           thumb_w, thumb_h;
 } WinInfo;
@@ -173,6 +174,19 @@ get_window_title(Window win)
         return title;
     }
     return strdup("(untitled)");
+}
+
+static char *
+get_window_class(Window win)
+{
+    XClassHint hint;
+    if (XGetClassHint(dpy, win, &hint)) {
+        char *cls = strdup(hint.res_class ? hint.res_class : "");
+        if (hint.res_name) XFree(hint.res_name);
+        if (hint.res_class) XFree(hint.res_class);
+        return cls;
+    }
+    return strdup("");
 }
 
 static void
@@ -319,7 +333,8 @@ get_window_list(WinInfo **out, int *out_count)
         list[count].xwin    = w;
         list[count].frame   = frame;
         list[count].desktop = desk;
-        list[count].title   = get_window_title(w);
+        list[count].title    = get_window_title(w);
+        list[count].wm_class = get_window_class(w);
         list[count].pixmap  = None;
         list[count].x       = wa.x;
         list[count].y       = wa.y;
@@ -370,19 +385,36 @@ get_window_list(WinInfo **out, int *out_count)
 }
 
 static int
+strcasestr_match(const char *haystack, const char *needle)
+{
+    if (!needle[0]) return 1;
+    size_t nlen = strlen(needle);
+    for (; *haystack; haystack++) {
+        if (strncasecmp(haystack, needle, nlen) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+static int
 build_visible(WinInfo *wins, int total, unsigned long tab, int *vis, int max,
-              int show_all)
+              int show_all, const char *filter)
 {
     int n = 0;
     for (int i = 0; i < total && n < max; i++) {
-        if (show_all || wins[i].desktop == tab || wins[i].desktop == ~0UL)
-            vis[n++] = i;
+        if (!(show_all || wins[i].desktop == tab || wins[i].desktop == ~0UL))
+            continue;
+        if (filter[0] && !strcasestr_match(wins[i].title, filter)
+                      && !strcasestr_match(wins[i].wm_class, filter))
+            continue;
+        vis[n++] = i;
     }
     return n;
 }
 
 static void
-compute_grid_layout(WinInfo *wins, int *vis, int vis_count, MonitorRect mon, int tab_h)
+compute_grid_layout(WinInfo *wins, int *vis, int vis_count, MonitorRect mon,
+                    int top_h, int bottom_h)
 {
     if (vis_count == 0) { grid_cols = 1; return; }
 
@@ -390,7 +422,7 @@ compute_grid_layout(WinInfo *wins, int *vis, int vis_count, MonitorRect mon, int
     int rows = (int)ceil((double)vis_count / cols);
     grid_cols = cols;
 
-    int avail_h = mon.h - tab_h;
+    int avail_h = mon.h - top_h - bottom_h;
     int cell_w = (mon.w - PADDING * (cols + 1)) / cols;
     int cell_h = (avail_h - PADDING * (rows + 1)) / rows - TITLE_HEIGHT;
 
@@ -408,7 +440,7 @@ compute_grid_layout(WinInfo *wins, int *vis, int vis_count, MonitorRect mon, int
         int thumb_h = (int)(wins[i].height * scale);
 
         int cx = mon.x + PADDING + col * (cell_w + PADDING) + (cell_w - thumb_w) / 2;
-        int cy = mon.y + PADDING + row * (cell_h + TITLE_HEIGHT + PADDING) + (cell_h - thumb_h) / 2;
+        int cy = mon.y + top_h + PADDING + row * (cell_h + TITLE_HEIGHT + PADDING) + (cell_h - thumb_h) / 2;
 
         wins[i].cell_x  = cx;
         wins[i].cell_y  = cy;
@@ -714,7 +746,7 @@ render_thumbnails(Window overlay, WinInfo *wins, int *vis, int vis_count,
                   int scr_w, int scr_h, MonitorRect mon, XftFont *font,
                   int selected, int num_desktops, char **desk_names,
                   DeskLayout layout, int cur_tab, int focus_mode,
-                  int tab_highlight, int show_all)
+                  int tab_highlight, int show_all, const char *filter)
 {
     Visual *dvis = DefaultVisual(dpy, scr);
     int ddepth = DefaultDepth(dpy, scr);
@@ -935,6 +967,20 @@ render_thumbnails(Window overlay, WinInfo *wins, int *vis, int vis_count,
 
     XftColorFree(dpy, dvis, cmap, &shadow_color);
 
+    if (filter[0]) {
+        XRenderColor filter_bg = { 0x2E2E, 0x3434, 0x3636, 0xFFFF };
+        XRenderFillRectangle(dpy, PictOpSrc, back_pic, &filter_bg,
+                             mon.x, mon.y, mon.w, TITLE_HEIGHT + PADDING);
+
+        char label[280];
+        snprintf(label, sizeof(label), "Filter: %s", filter);
+        int flen = strlen(label);
+        int fx = mon.x + PADDING;
+        int fy = mon.y + (TITLE_HEIGHT + PADDING + font->ascent - font->descent) / 2;
+        XftDrawStringUtf8(xftdraw, &text_color, font,
+                          fx, fy, (FcChar8 *)label, flen);
+    }
+
     int tab_total_h = TAB_HEIGHT * layout.rows;
     int tab_w = mon.w / layout.cols;
 
@@ -1087,12 +1133,17 @@ main(int argc, char **argv)
     MonitorRect mon = get_focused_monitor();
 
     int *vis = calloc(total, sizeof(int));
-    int vis_count = build_visible(wins, total, cur_tab, vis, total, show_all);
+    char filter[256] = {0};
+    int filter_len = 0;
+#define FILTER_HEIGHT (filter[0] ? (TITLE_HEIGHT + PADDING) : 0)
+
+    int vis_count = build_visible(wins, total, cur_tab, vis, total, show_all, filter);
 
     if (vis_count == 1 && (show_all || num_desktops == 1)) {
         activate_window(wins[vis[0]].xwin, wins[vis[0]].desktop, CurrentTime);
         for (int i = 0; i < total; i++) {
             free(wins[i].title);
+            free(wins[i].wm_class);
             if (wins[i].icon_pic != None) XRenderFreePicture(dpy, wins[i].icon_pic);
             if (wins[i].icon_pm != None) XFreePixmap(dpy, wins[i].icon_pm);
         }
@@ -1104,7 +1155,7 @@ main(int argc, char **argv)
         return 0;
     }
 
-    compute_grid_layout(wins, vis, vis_count, mon, tab_total_h);
+    compute_grid_layout(wins, vis, vis_count, mon, FILTER_HEIGHT, tab_total_h);
     grab_visible_pixmaps(wins, vis, vis_count);
 
     XSetWindowAttributes swa;
@@ -1176,7 +1227,16 @@ main(int argc, char **argv)
 
 #define DO_RENDER() render_thumbnails(overlay, wins, vis, vis_count, \
     scr_w, scr_h, mon, font, selected, num_desktops, desk_names, \
-    desk_layout, cur_tab, focus_mode, tab_highlight, show_all)
+    desk_layout, cur_tab, focus_mode, tab_highlight, show_all, filter)
+
+#define REFILTER() do { \
+    ungrab_visible_pixmaps(wins, vis, vis_count); \
+    vis_count = build_visible(wins, total, cur_tab, vis, total, show_all, filter); \
+    compute_grid_layout(wins, vis, vis_count, mon, FILTER_HEIGHT, tab_total_h); \
+    grab_visible_pixmaps(wins, vis, vis_count); \
+    if (selected >= vis_count) selected = vis_count > 0 ? vis_count - 1 : 0; \
+    DO_RENDER(); \
+} while(0)
 
 #define CLOSE_WINDOW(idx, timestamp) do { \
     int _wi = vis[(idx)]; \
@@ -1199,7 +1259,7 @@ main(int argc, char **argv)
     vis_count--; \
     if (vis_count == 0) { running = 0; break; } \
     if (selected >= vis_count) selected = vis_count - 1; \
-    compute_grid_layout(wins, vis, vis_count, mon, tab_total_h); \
+    compute_grid_layout(wins, vis, vis_count, mon, FILTER_HEIGHT, tab_total_h); \
     DO_RENDER(); \
 } while(0)
 
@@ -1208,10 +1268,11 @@ main(int argc, char **argv)
     cur_tab = (new_tab); \
     tab_highlight = cur_tab; \
     switch_desktop(cur_tab); \
-    vis_count = build_visible(wins, total, cur_tab, vis, total, 0); \
+    filter[0] = '\0'; filter_len = 0; \
+    vis_count = build_visible(wins, total, cur_tab, vis, total, 0, filter); \
     if (vis_count > 0) \
         wait_for_map(); \
-    compute_grid_layout(wins, vis, vis_count, mon, tab_total_h); \
+    compute_grid_layout(wins, vis, vis_count, mon, FILTER_HEIGHT, tab_total_h); \
     grab_visible_pixmaps(wins, vis, vis_count); \
     selected = 0; \
     focus_mode = FOCUS_WINDOWS; \
@@ -1398,6 +1459,28 @@ main(int argc, char **argv)
                     if (allow_close && vis_count > 0)
                         CLOSE_WINDOW(selected, ev.xkey.time);
                     break;
+                case XK_BackSpace:
+                    if (filter_len > 0) {
+                        if (ev.xkey.state & ControlMask) {
+                            filter[0] = '\0';
+                            filter_len = 0;
+                        } else {
+                            filter[--filter_len] = '\0';
+                        }
+                        REFILTER();
+                    }
+                    break;
+                default: {
+                    char buf[8];
+                    int n = XLookupString(&ev.xkey, buf, sizeof(buf) - 1, NULL, NULL);
+                    if (n > 0 && buf[0] >= 0x20 && filter_len + n < (int)sizeof(filter) - 1) {
+                        memcpy(filter + filter_len, buf, n);
+                        filter_len += n;
+                        filter[filter_len] = '\0';
+                        REFILTER();
+                    }
+                    break;
+                }
                 }
             }
 
@@ -1428,6 +1511,7 @@ cleanup:
     ungrab_visible_pixmaps(wins, vis, vis_count);
     for (int i = 0; i < total; i++) {
         free(wins[i].title);
+        free(wins[i].wm_class);
         if (wins[i].icon_pic != None)
             XRenderFreePicture(dpy, wins[i].icon_pic);
         if (wins[i].icon_pm != None)
