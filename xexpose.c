@@ -814,10 +814,10 @@ get_desktop_names(int num_desktops, int *out_count)
 static void
 render_thumbnails(Window overlay, WinInfo *wins, int *vis, int vis_count,
                   int scr_w, int scr_h, MonitorRect mon, XftFont *font,
-                  int selected, int num_desktops, char **desk_names,
-                  DeskLayout layout, int cur_tab, int focus_mode,
-                  int tab_highlight, int show_all, const char *filter,
-                  const Config *cfg)
+                  XftFont *bold_font, int selected, int num_desktops,
+                  char **desk_names, DeskLayout layout, int cur_tab,
+                  int focus_mode, int tab_highlight, int show_all,
+                  const char *filter, const Config *cfg)
 {
     Visual *dvis = DefaultVisual(dpy, scr);
     int ddepth = DefaultDepth(dpy, scr);
@@ -1003,6 +1003,7 @@ render_thumbnails(Window overlay, WinInfo *wins, int *vis, int vis_count,
         int tx = wins[i].cell_x;
         int ty = wins[i].cell_y + wins[i].thumb_h + TITLE_HEIGHT;
         int max_w = wins[i].thumb_w;
+        XftFont *title_font = wins[i].urgent ? bold_font : font;
 
         char *title = wins[i].title;
         int full_len = strlen(title);
@@ -1010,30 +1011,30 @@ render_thumbnails(Window overlay, WinInfo *wins, int *vis, int vis_count,
         int truncated = 0;
 
         XGlyphInfo extents;
-        XftTextExtentsUtf8(dpy, font, (FcChar8 *)title, len, &extents);
+        XftTextExtentsUtf8(dpy, title_font, (FcChar8 *)title, len, &extents);
 
         if (extents.xOff > max_w) {
             XGlyphInfo ellipsis_ext;
-            XftTextExtentsUtf8(dpy, font, (FcChar8 *)"\xe2\x80\xa6", 3, &ellipsis_ext);
+            XftTextExtentsUtf8(dpy, title_font, (FcChar8 *)"\xe2\x80\xa6", 3, &ellipsis_ext);
             int avail = max_w - ellipsis_ext.xOff;
 
             while (len > 1) {
                 len--;
-                XftTextExtentsUtf8(dpy, font, (FcChar8 *)title, len, &extents);
+                XftTextExtentsUtf8(dpy, title_font, (FcChar8 *)title, len, &extents);
                 if (extents.xOff <= avail) break;
             }
             truncated = 1;
         }
 
-        XftDrawStringUtf8(xftdraw, &shadow_color, font,
+        XftDrawStringUtf8(xftdraw, &shadow_color, title_font,
                           tx + 1, ty + 1, (FcChar8 *)title, len);
-        XftDrawStringUtf8(xftdraw, &text_color, font,
+        XftDrawStringUtf8(xftdraw, &text_color, title_font,
                           tx, ty, (FcChar8 *)title, len);
         if (truncated) {
-            XftDrawStringUtf8(xftdraw, &shadow_color, font,
+            XftDrawStringUtf8(xftdraw, &shadow_color, title_font,
                               tx + extents.xOff + 1, ty + 1,
                               (FcChar8 *)"\xe2\x80\xa6", 3);
-            XftDrawStringUtf8(xftdraw, &text_color, font,
+            XftDrawStringUtf8(xftdraw, &text_color, title_font,
                               tx + extents.xOff, ty,
                               (FcChar8 *)"\xe2\x80\xa6", 3);
         }
@@ -1314,6 +1315,12 @@ main(int argc, char **argv)
         goto cleanup;
     }
 
+    char bold_font_name[270];
+    snprintf(bold_font_name, sizeof(bold_font_name), "%s:bold", cfg.font);
+    XftFont *bold_font = XftFontOpenName(dpy, scr, bold_font_name);
+    if (!bold_font)
+        bold_font = font;
+
     int selected = 0;
     {
         Atom type;
@@ -1353,7 +1360,7 @@ main(int argc, char **argv)
     }
 
 #define DO_RENDER() render_thumbnails(overlay, wins, vis, vis_count, \
-    scr_w, scr_h, mon, font, selected, num_desktops, desk_names, \
+    scr_w, scr_h, mon, font, bold_font, selected, num_desktops, desk_names, \
     desk_layout, cur_tab, focus_mode, tab_highlight, show_all, filter, &cfg)
 
 #define REFILTER() do { \
@@ -1633,6 +1640,7 @@ main(int argc, char **argv)
         }
     }
 
+    if (bold_font && bold_font != font) XftFontClose(dpy, bold_font);
     if (font) XftFontClose(dpy, font);
 
     XUngrabPointer(dpy, CurrentTime);
