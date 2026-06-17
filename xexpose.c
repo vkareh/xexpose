@@ -49,6 +49,7 @@ typedef struct {
     unsigned long desktop;
     char         *title;
     char         *wm_class;
+    int           urgent;
     int           cell_x, cell_y;
     int           thumb_w, thumb_h;
 } WinInfo;
@@ -81,6 +82,7 @@ static Atom atom_type_desktop;
 static Atom atom_wm_state;
 static Atom atom_state_hidden;
 static Atom atom_state_skip_pager;
+static Atom atom_state_attention;
 static Atom atom_frame_extents;
 static Atom atom_wm_name;
 static Atom atom_wm_icon;
@@ -103,6 +105,7 @@ intern_atoms(void)
     atom_wm_state         = XInternAtom(dpy, "_NET_WM_STATE", False);
     atom_state_hidden     = XInternAtom(dpy, "_NET_WM_STATE_HIDDEN", False);
     atom_state_skip_pager = XInternAtom(dpy, "_NET_WM_STATE_SKIP_PAGER", False);
+    atom_state_attention  = XInternAtom(dpy, "_NET_WM_STATE_DEMANDS_ATTENTION", False);
     atom_frame_extents    = XInternAtom(dpy, "_NET_FRAME_EXTENTS", False);
     atom_wm_name          = XInternAtom(dpy, "_NET_WM_NAME", False);
     atom_wm_icon          = XInternAtom(dpy, "_NET_WM_ICON", False);
@@ -115,6 +118,7 @@ typedef struct {
     XRenderColor border;
     XRenderColor highlight;
     XRenderColor sticky;
+    XRenderColor urgent;
     char         font[256];
 } Config;
 
@@ -142,6 +146,7 @@ load_config(Config *cfg)
     parse_hex_color("#555753", &cfg->border);
     parse_hex_color("#eeeeec", &cfg->highlight);
     parse_hex_color("#edd400", &cfg->sticky);
+    parse_hex_color("#ef2929", &cfg->urgent);
     strncpy(cfg->font, "sans-10", sizeof(cfg->font) - 1);
 
     XrmInitialize();
@@ -164,6 +169,8 @@ load_config(Config *cfg)
         parse_hex_color(val.addr, &cfg->highlight);
     if (XrmGetResource(db, "xexpose.stickyColor", "Xexpose.StickyColor", &type, &val))
         parse_hex_color(val.addr, &cfg->sticky);
+    if (XrmGetResource(db, "xexpose.urgentColor", "Xexpose.UrgentColor", &type, &val))
+        parse_hex_color(val.addr, &cfg->urgent);
     if (XrmGetResource(db, "xexpose.font", "Xexpose.Font", &type, &val))
         strncpy(cfg->font, val.addr, sizeof(cfg->font) - 1);
 
@@ -397,6 +404,7 @@ get_window_list(WinInfo **out, int *out_count)
         list[count].desktop = desk;
         list[count].title    = get_window_title(w);
         list[count].wm_class = get_window_class(w);
+        list[count].urgent  = has_atom_in_list(w, atom_wm_state, atom_state_attention);
         list[count].pixmap  = None;
         list[count].x       = wa.x;
         list[count].y       = wa.y;
@@ -856,6 +864,7 @@ render_thumbnails(Window overlay, WinInfo *wins, int *vis, int vis_count,
     XRenderColor border_color    = cfg->border;
     XRenderColor highlight_color = cfg->highlight;
     XRenderColor sticky_color    = cfg->sticky;
+    XRenderColor urgent_color    = cfg->urgent;
 
     XErrorHandler old_handler = XSetErrorHandler(error_handler);
 
@@ -866,10 +875,12 @@ render_thumbnails(Window overlay, WinInfo *wins, int *vis, int vis_count,
 
         int is_selected = (focus_mode == FOCUS_WINDOWS && vi == selected);
         int is_sticky = (wins[i].desktop == ~0UL);
+        int is_urgent = wins[i].urgent;
         XRenderColor *bc = is_selected ? &highlight_color
+                         : is_urgent   ? &urgent_color
                          : is_sticky   ? &sticky_color
                          :               &border_color;
-        int bw = is_selected ? 4 : is_sticky ? 3 : 2;
+        int bw = is_selected ? 4 : (is_urgent || is_sticky) ? 3 : 2;
 
         XRenderFillRectangle(dpy, PictOpOver, back_pic, bc,
                              wins[i].cell_x - bw, wins[i].cell_y - bw,
@@ -1163,7 +1174,8 @@ main(int argc, char **argv)
                    "\n"
                    "Appearance can be customized via X resources:\n"
                    "  xexpose.foreground, xexpose.background, xexpose.borderColor,\n"
-                   "  xexpose.highlightColor, xexpose.stickyColor, xexpose.font\n");
+                   "  xexpose.highlightColor, xexpose.stickyColor, xexpose.urgentColor,\n"
+                   "  xexpose.font\n");
             return 0;
         } else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--version") == 0) {
             printf("xexpose 1.0\n");

@@ -17,6 +17,7 @@ Should work with any EWMH-compliant X11 window manager like marco, metacity, kwi
 - Application icons overlaid on thumbnails
 - Desktop wallpaper as dimmed backdrop
 - Sticky window support with visual indicator
+- Urgent window support with visual indicator
 
 ## Dependencies
 
@@ -89,6 +90,7 @@ xexpose.background:     #2e3436
 xexpose.borderColor:    #555753
 xexpose.highlightColor: #eeeeec
 xexpose.stickyColor:    #edd400
+xexpose.urgentColor:    #ef2929
 xexpose.font:           sans-10
 ```
 
