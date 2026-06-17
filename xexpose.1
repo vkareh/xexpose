@@ -5,6 +5,7 @@ xexpose \- lightweight window picker for X11
 .B xexpose
 .RB [ \-a | \-\-all ]
 .RB [ \-\-allow\-close ]
+.RB [ \-\-hide\-minimized ]
 .SH DESCRIPTION
 .B xexpose
 shows live thumbnails of all windows in a grid overlay, letting you
@@ -13,7 +14,10 @@ window manager.
 .PP
 Windows are displayed as scaled thumbnails with application icons and
 titles. The current workspace is shown by default, with tabs at the
-bottom for switching between workspaces.
+bottom for switching between workspaces. Minimized windows appear in
+a separate row above the tabs as semi\-transparent placeholders with
+their application icon. Windows requesting attention are highlighted
+with a red border and bold title.
 .SH OPTIONS
 .TP
 .BR \-a ", " \-\-all
@@ -24,6 +28,11 @@ with a centered application icon.
 .B \-\-allow\-close
 Enable closing windows from the picker via middle\-click or the Delete key.
 Disabled by default to prevent accidental closes.
+.TP
+.B \-\-hide\-minimized
+Exclude minimized windows from the picker. By default, minimized windows
+are shown in a separate row above the workspace tabs as semi\-transparent
+placeholders with their application icon.
 .TP
 .BR \-h ", " \-\-help
 Show usage information and exit.

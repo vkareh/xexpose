@@ -27,8 +27,9 @@
 
 #define ICON_SIZE   96
 
-#define FOCUS_WINDOWS 0
-#define FOCUS_TABS    1
+#define FOCUS_WINDOWS   0
+#define FOCUS_TABS      1
+#define FOCUS_MINIMIZED 2
 
 typedef struct {
     int x, y, w, h;
@@ -50,6 +51,7 @@ typedef struct {
     char         *title;
     char         *wm_class;
     int           urgent;
+    int           minimized;
     int           cell_x, cell_y;
     int           thumb_w, thumb_h;
 } WinInfo;
@@ -378,8 +380,6 @@ get_window_list(WinInfo **out, int *out_count)
             continue;
         if (has_atom_in_list(w, atom_wm_type, atom_type_desktop))
             continue;
-        if (has_atom_in_list(w, atom_wm_state, atom_state_hidden))
-            continue;
         if (has_atom_in_list(w, atom_wm_state, atom_state_skip_pager))
             continue;
 
@@ -404,7 +404,8 @@ get_window_list(WinInfo **out, int *out_count)
         list[count].desktop = desk;
         list[count].title    = get_window_title(w);
         list[count].wm_class = get_window_class(w);
-        list[count].urgent  = has_atom_in_list(w, atom_wm_state, atom_state_attention);
+        list[count].urgent    = has_atom_in_list(w, atom_wm_state, atom_state_attention);
+        list[count].minimized = has_atom_in_list(w, atom_wm_state, atom_state_hidden);
         list[count].pixmap  = None;
         list[count].x       = wa.x;
         list[count].y       = wa.y;
@@ -468,16 +469,34 @@ strcasestr_match(const char *haystack, const char *needle)
 
 static int
 build_visible(WinInfo *wins, int total, unsigned long tab, int *vis, int max,
-              int show_all, const char *filter)
+              int show_all, int hide_minimized, const char *filter,
+              int *min_start)
 {
     int n = 0;
+    /* Normal windows first */
     for (int i = 0; i < total && n < max; i++) {
+        if (wins[i].minimized)
+            continue;
         if (!(show_all || wins[i].desktop == tab || wins[i].desktop == ~0UL))
             continue;
         if (filter[0] && !strcasestr_match(wins[i].title, filter)
                       && !strcasestr_match(wins[i].wm_class, filter))
             continue;
         vis[n++] = i;
+    }
+    *min_start = n;
+    /* Minimized windows at the end */
+    if (!hide_minimized) {
+        for (int i = 0; i < total && n < max; i++) {
+            if (!wins[i].minimized)
+                continue;
+            if (!(show_all || wins[i].desktop == tab || wins[i].desktop == ~0UL))
+                continue;
+            if (filter[0] && !strcasestr_match(wins[i].title, filter)
+                          && !strcasestr_match(wins[i].wm_class, filter))
+                continue;
+            vis[n++] = i;
+        }
     }
     return n;
 }
@@ -813,11 +832,11 @@ get_desktop_names(int num_desktops, int *out_count)
 
 static void
 render_thumbnails(Window overlay, WinInfo *wins, int *vis, int vis_count,
-                  int scr_w, int scr_h, MonitorRect mon, XftFont *font,
-                  XftFont *bold_font, int selected, int num_desktops,
-                  char **desk_names, DeskLayout layout, int cur_tab,
-                  int focus_mode, int tab_highlight, int show_all,
-                  const char *filter, const Config *cfg)
+                  int min_start, int scr_w, int scr_h, MonitorRect mon,
+                  XftFont *font, XftFont *bold_font, int selected,
+                  int num_desktops, char **desk_names, DeskLayout layout,
+                  int cur_tab, int focus_mode, int tab_highlight,
+                  int show_all, const char *filter, const Config *cfg)
 {
     Visual *dvis = DefaultVisual(dpy, scr);
     int ddepth = DefaultDepth(dpy, scr);
@@ -870,7 +889,7 @@ render_thumbnails(Window overlay, WinInfo *wins, int *vis, int vis_count,
 
     XRenderColor placeholder_bg = cfg->border;
 
-    for (int vi = 0; vi < vis_count; vi++) {
+    for (int vi = 0; vi < min_start; vi++) {
         int i = vis[vi];
 
         int is_selected = (focus_mode == FOCUS_WINDOWS && vi == selected);
@@ -998,7 +1017,7 @@ render_thumbnails(Window overlay, WinInfo *wins, int *vis, int vis_count,
     XRenderColor sc = { 0x0000, 0x0000, 0x0000, 0xCCCC };
     XftColorAllocValue(dpy, dvis, cmap, &sc, &shadow_color);
 
-    for (int vi = 0; vi < vis_count; vi++) {
+    for (int vi = 0; vi < min_start; vi++) {
         int i = vis[vi];
         int tx = wins[i].cell_x;
         int ty = wins[i].cell_y + wins[i].thumb_h + TITLE_HEIGHT;
@@ -1041,6 +1060,100 @@ render_thumbnails(Window overlay, WinInfo *wins, int *vis, int vis_count,
     }
 
     XftColorFree(dpy, dvis, cmap, &shadow_color);
+
+    /* Minimized window icon row */
+    if (min_start < vis_count) {
+        int min_count = vis_count - min_start;
+        int tab_total_h_local = show_all ? 0 : TAB_HEIGHT * layout.rows;
+        int cell_sz = 256;
+        int slot_w = cell_sz + PADDING;
+        int icon_sz = ICON_SIZE > cell_sz - 16 ? cell_sz - 16 : ICON_SIZE;
+        int row_y = mon.y + mon.h - tab_total_h_local - cell_sz - TITLE_HEIGHT - PADDING;
+        int total_w = min_count * slot_w - PADDING;
+        int start_x = mon.x + (mon.w - total_w) / 2;
+
+        for (int vi = min_start; vi < vis_count; vi++) {
+            int i = vis[vi];
+            int mi = vi - min_start;
+            int cx = start_x + mi * slot_w;
+            int cy = row_y;
+
+            int is_sel = (focus_mode == FOCUS_MINIMIZED && vi == selected);
+            int is_urgent = wins[i].urgent;
+            XRenderColor *mc = is_sel   ? &highlight_color
+                             : is_urgent ? &urgent_color
+                             :             &border_color;
+            int mbw = is_sel ? 4 : is_urgent ? 3 : 2;
+
+            /* Border at 50% opacity */
+            XRenderColor mc_half = { mc->red, mc->green, mc->blue, 0x8000 };
+            XRenderFillRectangle(dpy, PictOpOver, back_pic, &mc_half,
+                                 cx - mbw, cy - mbw,
+                                 cell_sz + mbw * 2, cell_sz + mbw * 2);
+
+            /* Placeholder background at 50% opacity */
+            XRenderColor ph_half = { placeholder_bg.red, placeholder_bg.green,
+                                     placeholder_bg.blue, 0x8000 };
+            XRenderFillRectangle(dpy, PictOpOver, back_pic, &ph_half,
+                                 cx, cy, cell_sz, cell_sz);
+
+            /* Centered icon at ~70% opacity */
+            if (wins[i].icon_pic != None) {
+                if (wins[i].icon_w != icon_sz || wins[i].icon_h != icon_sz) {
+                    XTransform ixform = {{
+                        { XDoubleToFixed((double)wins[i].icon_w / icon_sz), 0, 0 },
+                        { 0, XDoubleToFixed((double)wins[i].icon_h / icon_sz), 0 },
+                        { 0, 0, XDoubleToFixed(1.0) }
+                    }};
+                    XRenderSetPictureTransform(dpy, wins[i].icon_pic, &ixform);
+                    XRenderSetPictureFilter(dpy, wins[i].icon_pic, FilterBilinear, NULL, 0);
+                }
+                int iox = cx + (cell_sz - icon_sz) / 2;
+                int ioy = cy + (cell_sz - icon_sz) / 2;
+
+                XRenderColor alpha_c = { 0, 0, 0, 0x8000 };
+                Pixmap alpha_pm = XCreatePixmap(dpy, root, 1, 1, 8);
+                XRenderPictFormat *alpha_fmt = XRenderFindStandardFormat(dpy, PictStandardA8);
+                XRenderPictureAttributes alpha_pa;
+                alpha_pa.repeat = RepeatNormal;
+                Picture alpha_pic = XRenderCreatePicture(dpy, alpha_pm, alpha_fmt, CPRepeat, &alpha_pa);
+                XRenderFillRectangle(dpy, PictOpSrc, alpha_pic, &alpha_c, 0, 0, 1, 1);
+                XRenderComposite(dpy, PictOpOver, wins[i].icon_pic, alpha_pic, back_pic,
+                                 0, 0, 0, 0, iox, ioy, icon_sz, icon_sz);
+                XRenderFreePicture(dpy, alpha_pic);
+                XFreePixmap(dpy, alpha_pm);
+            }
+
+            /* Title below, ellipsized */
+            char *title = wins[i].title;
+            int tlen = strlen(title);
+            int truncated = 0;
+            XftFont *tf = is_urgent ? bold_font : font;
+            XGlyphInfo ext;
+            XftTextExtentsUtf8(dpy, tf, (FcChar8 *)title, tlen, &ext);
+            if (ext.xOff > cell_sz) {
+                XGlyphInfo ell_ext;
+                XftTextExtentsUtf8(dpy, tf, (FcChar8 *)"\xe2\x80\xa6", 3, &ell_ext);
+                int avail = cell_sz - ell_ext.xOff;
+                while (tlen > 1) {
+                    tlen--;
+                    XftTextExtentsUtf8(dpy, tf, (FcChar8 *)title, tlen, &ext);
+                    if (ext.xOff <= avail) break;
+                }
+                truncated = 1;
+            }
+            int tx = cx + (cell_sz - ext.xOff - (truncated ? 0 : 0)) / 2;
+            if (truncated) tx = cx;
+            int ty = cy + cell_sz + font->ascent + 2;
+            XftDrawStringUtf8(xftdraw, &text_color, tf,
+                              tx, ty, (FcChar8 *)title, tlen);
+            if (truncated) {
+                XftDrawStringUtf8(xftdraw, &text_color, tf,
+                                  tx + ext.xOff, ty,
+                                  (FcChar8 *)"\xe2\x80\xa6", 3);
+            }
+        }
+    }
 
     if (filter[0]) {
         XRenderColor filter_bg = cfg->background;
@@ -1111,9 +1224,9 @@ render_thumbnails(Window overlay, WinInfo *wins, int *vis, int vis_count,
 }
 
 static int
-find_window_at(WinInfo *wins, int *vis, int vis_count, int mx, int my)
+find_window_at(WinInfo *wins, int *vis, int min_start, int mx, int my)
 {
-    for (int vi = 0; vi < vis_count; vi++) {
+    for (int vi = 0; vi < min_start; vi++) {
         int i = vis[vi];
         if (mx >= wins[i].cell_x && mx < wins[i].cell_x + wins[i].thumb_w &&
             my >= wins[i].cell_y && my < wins[i].cell_y + wins[i].thumb_h) {
@@ -1121,6 +1234,29 @@ find_window_at(WinInfo *wins, int *vis, int vis_count, int mx, int my)
         }
     }
     return -1;
+}
+
+static int
+find_minimized_at(int mx, int my, int min_start, int vis_count,
+                  MonitorRect mon, int show_all, DeskLayout layout)
+{
+    if (min_start >= vis_count) return -1;
+    int min_count = vis_count - min_start;
+    int tab_total_h = show_all ? 0 : TAB_HEIGHT * layout.rows;
+    int cell_sz = 256;
+    int slot_w = cell_sz + PADDING;
+    int total_w = min_count * slot_w - PADDING;
+    int start_x = mon.x + (mon.w - total_w) / 2;
+    int row_y = mon.y + mon.h - tab_total_h - cell_sz - TITLE_HEIGHT - PADDING;
+    int row_h = cell_sz + TITLE_HEIGHT;
+
+    if (my < row_y || my >= row_y + row_h)
+        return -1;
+    if (mx < start_x || mx >= start_x + total_w + PADDING)
+        return -1;
+    int idx = (mx - start_x) / slot_w;
+    if (idx < 0 || idx >= min_count) return -1;
+    return min_start + idx;
 }
 
 static int
@@ -1145,21 +1281,25 @@ main(int argc, char **argv)
 {
     int show_all = 0;
     int allow_close = 0;
+    int hide_minimized = 0;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-a") == 0 || strcmp(argv[i], "--all") == 0)
             show_all = 1;
         else if (strcmp(argv[i], "--allow-close") == 0)
             allow_close = 1;
+        else if (strcmp(argv[i], "--hide-minimized") == 0)
+            hide_minimized = 1;
         else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
-            printf("Usage: xexpose [-a|--all] [--allow-close]\n"
+            printf("Usage: xexpose [-a|--all] [--allow-close] [--hide-minimized]\n"
                    "\n"
                    "Lightweight window picker for X11.\n"
                    "\n"
                    "Options:\n"
-                   "  -a, --all       Show windows from all workspaces\n"
-                   "  --allow-close   Enable middle-click and Delete to close windows\n"
-                   "  -h, --help      Show this help\n"
-                   "  -v, --version   Show version\n"
+                   "  -a, --all          Show windows from all workspaces\n"
+                   "  --allow-close      Enable middle-click and Delete to close windows\n"
+                   "  --hide-minimized   Exclude minimized windows\n"
+                   "  -h, --help         Show this help\n"
+                   "  -v, --version      Show version\n"
                    "\n"
                    "Controls:\n"
                    "  Arrows          Navigate between thumbnails\n"
@@ -1246,8 +1386,10 @@ main(int argc, char **argv)
     char filter[256] = {0};
     int filter_len = 0;
 #define FILTER_HEIGHT (filter[0] ? (TITLE_HEIGHT + PADDING) : 0)
+#define MIN_ROW_HEIGHT (min_start < vis_count ? (256 + TITLE_HEIGHT + PADDING) : 0)
 
-    int vis_count = build_visible(wins, total, cur_tab, vis, total, show_all, filter);
+    int min_start = 0;
+    int vis_count = build_visible(wins, total, cur_tab, vis, total, show_all, hide_minimized, filter, &min_start);
 
     if (vis_count == 1 && (show_all || num_desktops == 1)) {
         activate_window(wins[vis[0]].xwin, wins[vis[0]].desktop, CurrentTime);
@@ -1265,8 +1407,8 @@ main(int argc, char **argv)
         return 0;
     }
 
-    compute_grid_layout(wins, vis, vis_count, mon, FILTER_HEIGHT, tab_total_h);
-    grab_visible_pixmaps(wins, vis, vis_count);
+    compute_grid_layout(wins, vis, min_start, mon, FILTER_HEIGHT, tab_total_h + MIN_ROW_HEIGHT);
+    grab_visible_pixmaps(wins, vis, min_start);
 
     XSetWindowAttributes swa;
     swa.override_redirect = True;
@@ -1360,14 +1502,15 @@ main(int argc, char **argv)
     }
 
 #define DO_RENDER() render_thumbnails(overlay, wins, vis, vis_count, \
-    scr_w, scr_h, mon, font, bold_font, selected, num_desktops, desk_names, \
-    desk_layout, cur_tab, focus_mode, tab_highlight, show_all, filter, &cfg)
+    min_start, scr_w, scr_h, mon, font, bold_font, selected, num_desktops, \
+    desk_names, desk_layout, cur_tab, focus_mode, tab_highlight, show_all, \
+    filter, &cfg)
 
 #define REFILTER() do { \
-    ungrab_visible_pixmaps(wins, vis, vis_count); \
-    vis_count = build_visible(wins, total, cur_tab, vis, total, show_all, filter); \
-    compute_grid_layout(wins, vis, vis_count, mon, FILTER_HEIGHT, tab_total_h); \
-    grab_visible_pixmaps(wins, vis, vis_count); \
+    ungrab_visible_pixmaps(wins, vis, min_start); \
+    vis_count = build_visible(wins, total, cur_tab, vis, total, show_all, hide_minimized, filter, &min_start); \
+    compute_grid_layout(wins, vis, min_start, mon, FILTER_HEIGHT, tab_total_h + MIN_ROW_HEIGHT); \
+    grab_visible_pixmaps(wins, vis, min_start); \
     if (selected >= vis_count) selected = vis_count > 0 ? vis_count - 1 : 0; \
     DO_RENDER(); \
 } while(0)
@@ -1391,23 +1534,24 @@ main(int argc, char **argv)
     for (int _v = (idx); _v < vis_count - 1; _v++) \
         vis[_v] = vis[_v + 1]; \
     vis_count--; \
+    if ((idx) < min_start) min_start--; \
     if (vis_count == 0) { running = 0; break; } \
     if (selected >= vis_count) selected = vis_count - 1; \
-    compute_grid_layout(wins, vis, vis_count, mon, FILTER_HEIGHT, tab_total_h); \
+    compute_grid_layout(wins, vis, min_start, mon, FILTER_HEIGHT, tab_total_h + MIN_ROW_HEIGHT); \
     DO_RENDER(); \
 } while(0)
 
 #define SWITCH_TAB(new_tab) do { \
-    ungrab_visible_pixmaps(wins, vis, vis_count); \
+    ungrab_visible_pixmaps(wins, vis, min_start); \
     cur_tab = (new_tab); \
     tab_highlight = cur_tab; \
     switch_desktop(cur_tab); \
     filter[0] = '\0'; filter_len = 0; \
-    vis_count = build_visible(wins, total, cur_tab, vis, total, 0, filter); \
-    if (vis_count > 0) \
+    vis_count = build_visible(wins, total, cur_tab, vis, total, 0, hide_minimized, filter, &min_start); \
+    if (min_start > 0) \
         wait_for_map(); \
-    compute_grid_layout(wins, vis, vis_count, mon, FILTER_HEIGHT, tab_total_h); \
-    grab_visible_pixmaps(wins, vis, vis_count); \
+    compute_grid_layout(wins, vis, min_start, mon, FILTER_HEIGHT, tab_total_h + MIN_ROW_HEIGHT); \
+    grab_visible_pixmaps(wins, vis, min_start); \
     selected = 0; \
     focus_mode = FOCUS_WINDOWS; \
 } while(0)
@@ -1444,11 +1588,21 @@ main(int argc, char **argv)
                         DO_RENDER();
                     }
                 } else {
-                    int idx = find_window_at(wins, vis, vis_count, ev.xmotion.x, ev.xmotion.y);
-                    if (idx >= 0 && (idx != selected || focus_mode != FOCUS_WINDOWS)) {
-                        selected = idx;
-                        focus_mode = FOCUS_WINDOWS;
-                        DO_RENDER();
+                    int midx = find_minimized_at(ev.xmotion.x, ev.xmotion.y,
+                                                 min_start, vis_count, mon, show_all, desk_layout);
+                    if (midx >= 0) {
+                        if (midx != selected || focus_mode != FOCUS_MINIMIZED) {
+                            selected = midx;
+                            focus_mode = FOCUS_MINIMIZED;
+                            DO_RENDER();
+                        }
+                    } else {
+                        int idx = find_window_at(wins, vis, min_start, ev.xmotion.x, ev.xmotion.y);
+                        if (idx >= 0 && (idx != selected || focus_mode != FOCUS_WINDOWS)) {
+                            selected = idx;
+                            focus_mode = FOCUS_WINDOWS;
+                            DO_RENDER();
+                        }
                     }
                 }
             }
@@ -1457,7 +1611,10 @@ main(int argc, char **argv)
 
         case ButtonPress: {
             if (allow_close && ev.xbutton.button == Button2) {
-                int idx = find_window_at(wins, vis, vis_count, ev.xbutton.x, ev.xbutton.y);
+                int idx = find_window_at(wins, vis, min_start, ev.xbutton.x, ev.xbutton.y);
+                if (idx < 0)
+                    idx = find_minimized_at(ev.xbutton.x, ev.xbutton.y,
+                                            min_start, vis_count, mon, show_all, desk_layout);
                 if (idx >= 0)
                     CLOSE_WINDOW(idx, ev.xbutton.time);
                 break;
@@ -1470,7 +1627,15 @@ main(int argc, char **argv)
                 break;
             }
 
-            int idx = find_window_at(wins, vis, vis_count, ev.xbutton.x, ev.xbutton.y);
+            int midx = find_minimized_at(ev.xbutton.x, ev.xbutton.y,
+                                          min_start, vis_count, mon, show_all, desk_layout);
+            if (midx >= 0) {
+                activate_window(wins[vis[midx]].xwin, wins[vis[midx]].desktop, ev.xbutton.time);
+                running = 0;
+                break;
+            }
+
+            int idx = find_window_at(wins, vis, min_start, ev.xbutton.x, ev.xbutton.y);
             if (idx >= 0)
                 activate_window(wins[vis[idx]].xwin, wins[vis[idx]].desktop, ev.xbutton.time);
             running = 0;
@@ -1516,10 +1681,14 @@ main(int argc, char **argv)
                     if (th_row > 0) {
                         tab_highlight = (th_row - 1) * desk_layout.cols + th_col;
                         redraw = 1;
+                    } else if (min_start < vis_count) {
+                        focus_mode = FOCUS_MINIMIZED;
+                        selected = min_start;
+                        redraw = 1;
                     } else {
                         focus_mode = FOCUS_WINDOWS;
-                        int last_row_start = (vis_count / grid_cols) * grid_cols;
-                        if (last_row_start >= vis_count) last_row_start -= grid_cols;
+                        int last_row_start = (min_start / grid_cols) * grid_cols;
+                        if (last_row_start >= min_start) last_row_start -= grid_cols;
                         if (last_row_start < 0) last_row_start = 0;
                         selected = last_row_start;
                         redraw = 1;
@@ -1536,43 +1705,44 @@ main(int argc, char **argv)
                     redraw = 1;
                     break;
                 }
-            } else {
+            } else if (focus_mode == FOCUS_MINIMIZED) {
                 switch (ks) {
                 case XK_Escape:
                     running = 0;
                     break;
                 case XK_Return:
                 case XK_KP_Enter:
-                    if (vis_count > 0) {
-                        activate_window(wins[vis[selected]].xwin, wins[vis[selected]].desktop, ev.xkey.time);
-                        running = 0;
-                    }
+                    activate_window(wins[vis[selected]].xwin, wins[vis[selected]].desktop, ev.xkey.time);
+                    running = 0;
                     break;
                 case XK_Left:
-                    if (selected > 0) { selected--; redraw = 1; }
+                    if (selected > min_start) { selected--; redraw = 1; }
                     break;
                 case XK_Right:
                     if (selected < vis_count - 1) { selected++; redraw = 1; }
                     break;
                 case XK_Up:
-                    if (selected - grid_cols >= 0) { selected -= grid_cols; redraw = 1; }
+                    if (min_start > 0) {
+                        focus_mode = FOCUS_WINDOWS;
+                        int last_row_start = (min_start / grid_cols) * grid_cols;
+                        if (last_row_start >= min_start) last_row_start -= grid_cols;
+                        if (last_row_start < 0) last_row_start = 0;
+                        selected = last_row_start;
+                    }
+                    redraw = 1;
                     break;
                 case XK_Down:
-                    if (selected + grid_cols < vis_count) {
-                        selected += grid_cols;
-                        redraw = 1;
-                    } else if (!show_all && num_desktops > 1) {
+                    if (!show_all && num_desktops > 1) {
                         focus_mode = FOCUS_TABS;
                         tab_highlight = cur_tab;
                         redraw = 1;
                     }
                     break;
                 case XK_Tab:
-                    if (vis_count == 0) break;
                     if (ev.xkey.state & ShiftMask)
-                        selected = (selected - 1 + vis_count) % vis_count;
+                        selected = selected > min_start ? selected - 1 : vis_count - 1;
                     else
-                        selected = (selected + 1) % vis_count;
+                        selected = selected < vis_count - 1 ? selected + 1 : min_start;
                     if (ev.xkey.state & Mod4Mask)
                         super_tab_count++;
                     redraw = 1;
@@ -1590,7 +1760,69 @@ main(int argc, char **argv)
                     }
                     break;
                 case XK_Delete:
-                    if (allow_close && vis_count > 0)
+                    if (allow_close)
+                        CLOSE_WINDOW(selected, ev.xkey.time);
+                    break;
+                }
+            } else {
+                switch (ks) {
+                case XK_Escape:
+                    running = 0;
+                    break;
+                case XK_Return:
+                case XK_KP_Enter:
+                    if (min_start > 0) {
+                        activate_window(wins[vis[selected]].xwin, wins[vis[selected]].desktop, ev.xkey.time);
+                        running = 0;
+                    }
+                    break;
+                case XK_Left:
+                    if (selected > 0) { selected--; redraw = 1; }
+                    break;
+                case XK_Right:
+                    if (selected < min_start - 1) { selected++; redraw = 1; }
+                    break;
+                case XK_Up:
+                    if (selected - grid_cols >= 0) { selected -= grid_cols; redraw = 1; }
+                    break;
+                case XK_Down:
+                    if (selected + grid_cols < min_start) {
+                        selected += grid_cols;
+                        redraw = 1;
+                    } else if (min_start < vis_count) {
+                        focus_mode = FOCUS_MINIMIZED;
+                        selected = min_start;
+                        redraw = 1;
+                    } else if (!show_all && num_desktops > 1) {
+                        focus_mode = FOCUS_TABS;
+                        tab_highlight = cur_tab;
+                        redraw = 1;
+                    }
+                    break;
+                case XK_Tab:
+                    if (min_start == 0) break;
+                    if (ev.xkey.state & ShiftMask)
+                        selected = (selected - 1 + min_start) % min_start;
+                    else
+                        selected = (selected + 1) % min_start;
+                    if (ev.xkey.state & Mod4Mask)
+                        super_tab_count++;
+                    redraw = 1;
+                    break;
+                case XK_Page_Down:
+                    if (!show_all && cur_tab < num_desktops - 1) {
+                        SWITCH_TAB(cur_tab + 1);
+                        redraw = 1;
+                    }
+                    break;
+                case XK_Page_Up:
+                    if (!show_all && cur_tab > 0) {
+                        SWITCH_TAB(cur_tab - 1);
+                        redraw = 1;
+                    }
+                    break;
+                case XK_Delete:
+                    if (allow_close && min_start > 0)
                         CLOSE_WINDOW(selected, ev.xkey.time);
                     break;
                 case XK_BackSpace:
@@ -1626,7 +1858,7 @@ main(int argc, char **argv)
         case KeyRelease: {
             KeySym ks = XLookupKeysym(&ev.xkey, 0);
             if ((ks == XK_Super_L || ks == XK_Super_R) && super_tab_count > 0) {
-                if (vis_count > 0 && focus_mode == FOCUS_WINDOWS)
+                if (vis_count > 0 && (focus_mode == FOCUS_WINDOWS || focus_mode == FOCUS_MINIMIZED))
                     activate_window(wins[vis[selected]].xwin, wins[vis[selected]].desktop, ev.xkey.time);
                 running = 0;
             }
@@ -1648,7 +1880,7 @@ main(int argc, char **argv)
     XDestroyWindow(dpy, overlay);
 
 cleanup:
-    ungrab_visible_pixmaps(wins, vis, vis_count);
+    ungrab_visible_pixmaps(wins, vis, min_start);
     for (int i = 0; i < total; i++) {
         free(wins[i].title);
         free(wins[i].wm_class);

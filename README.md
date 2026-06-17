@@ -18,6 +18,7 @@ Should work with any EWMH-compliant X11 window manager like marco, metacity, kwi
 - Desktop wallpaper as dimmed backdrop
 - Sticky window support with visual indicator
 - Urgent window support with visual indicator
+- Minimized windows shown in a separate row with semi-transparent placeholders
 
 ## Dependencies
 
@@ -46,13 +47,14 @@ sudo make install
 ## Usage
 
 ```
-xexpose [-a|--all] [--allow-close]
+xexpose [-a|--all] [--allow-close] [--hide-minimized]
 ```
 
 | Option | Description |
 |--------|-------------|
 | `-a`, `--all` | Show windows from all workspaces in a single grid |
 | `--allow-close` | Enable middle-click to close windows |
+| `--hide-minimized` | Exclude minimized windows from the picker |
 
 Bind it to a key in your window manager for quick access. For example, in marco:
 
